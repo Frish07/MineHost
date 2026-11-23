@@ -26,9 +26,11 @@
 
 ## Порядок сборки
 
-Проверки кода → production EXE через `tauri build --no-bundle` → upload GitHub artifact → подпись EXE в SignPath → проверка Authenticode и timestamp → NSIS через `tauri bundle --no-binary-patching` → upload installer artifact → подпись установщика → повторная проверка подписей → SHA-256 → Release.
+Проверки кода → production EXE и черновой NSIS через `tauri build --bundles nsis` для инициализации bundle metadata → upload GitHub artifact → подпись подготовленного EXE в SignPath → проверка Authenticode и timestamp → повторная упаковка NSIS через `tauri bundle --no-binary-patching` → upload installer artifact → подпись установщика → повторная проверка подписей → SHA-256 → Release. Промежуточный черновой установщик не публикуется.
 
 `--no-binary-patching` сохраняет подписанный EXE без изменения байтов. Это подходит текущему единственному формату NSIS; updater с несколькими типами bundle сейчас не используется. После упаковки workflow сравнивает хеш EXE до и после. При включённой подписи unsigned fallback запрещён. При выключенной настройке обычные сборки продолжаются без обращения к SignPath и явно остаются unsigned.
+
+После одобрения Foundation обновите статус в CODE_SIGNING_POLICY.md и README, сохранив пометку старых релизов как unsigned. Настройте доверенную временную метку для Authenticode в SignPath: без timestamp проверка не примет результат.
 
 Приватный ключ остаётся у сервиса. На компьютере пользователя ничего не устанавливается; все средства сборки и проверки подписей работают только на `windows-latest`.
 

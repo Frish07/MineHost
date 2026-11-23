@@ -95,8 +95,8 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked managed_java_download_and_paper_contract -- --ignored --nocapture
       - name: Build Rust backend
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
-      - name: Build production application before packaging
-        run: node ./node_modules/@tauri-apps/cli/tauri.js build --ci --target x86_64-pc-windows-msvc --no-bundle -- --locked
+      - name: Build production application and initialize NSIS bundle metadata
+        run: node ./node_modules/@tauri-apps/cli/tauri.js build --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked
       - name: Prepare exact application signing payload
         if: inputs.sign_windows
         id: app-metadata
@@ -136,8 +136,21 @@ jobs:
         run: |
           ./scripts/Assert-WindowsSignature.ps1 -Path signing-output/app/minehost.exe
           Copy-Item signing-output/app/minehost.exe src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe -Force
+      - name: Record prepared executable digest before final packaging
+        id: app-digest
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe -Algorithm SHA256).Hash
+          "sha256=$hash" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
       - name: Package existing application without modifying its signature
         run: node ./node_modules/@tauri-apps/cli/tauri.js bundle --ci --target x86_64-pc-windows-msvc --bundles nsis --no-binary-patching
+      - name: Ensure final packaging preserved the executable bytes
+        shell: pwsh
+        env:
+          PREPARED_SHA256: ${{ steps.app-digest.outputs.sha256 }}
+        run: |
+          $hash = (Get-FileHash src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe -Algorithm SHA256).Hash
+          if ($hash -cne $env:PREPARED_SHA256) { throw 'Final packaging modified the prepared executable' }
       - name: Prepare exact installer signing payload
         if: inputs.sign_windows
         id: installer-metadata
@@ -202,14 +215,27 @@ jobs:
         shell: pwsh
         run: |
           $executable = (Resolve-Path 'src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe').Path
-          $process = Start-Process -FilePath $executable -PassThru -WindowStyle Hidden
+          $stderr = Join-Path $env:RUNNER_TEMP 'minehost-startup-stderr.log'
+          $stdout = Join-Path $env:RUNNER_TEMP 'minehost-startup-stdout.log'
+          $process = Start-Process -FilePath $executable -PassThru -WindowStyle Hidden -RedirectStandardError $stderr -RedirectStandardOutput $stdout
           try {
-            Start-Sleep -Seconds 10
-            $process.Refresh()
-            if ($process.HasExited) { throw "MineHost exited during startup: $($process.ExitCode)" }
             $database = Join-Path $env:LOCALAPPDATA 'dev.frish07.minehost/config/minehost.sqlite'
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              $process.Refresh()
+              if ($process.HasExited) { throw "MineHost exited during startup: $($process.ExitCode)" }
+              if (Test-Path $database) { break }
+              Start-Sleep -Milliseconds 500
+            } while ([DateTime]::UtcNow -lt $deadline)
             if (!(Test-Path $database)) { throw 'MineHost did not initialize its SQLite database' }
+            Start-Sleep -Seconds 2
+            $process.Refresh()
+            if ($process.HasExited) { throw "MineHost exited after database initialization: $($process.ExitCode)" }
             Write-Output 'Packaged MineHost started and initialized its database successfully.'
+          } catch {
+            if (Test-Path $stderr) { Get-Content $stderr -Tail 50 }
+            Write-Output "::error title=MineHost startup::$($_.Exception.Message)"
+            throw
           } finally {
             # This fresh runner has no server profiles or Java children.
             if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
