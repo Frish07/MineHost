@@ -31,7 +31,11 @@ pub struct DownloadProgress {
 
 impl DownloadProgress {
     pub fn new(phase: DownloadPhase, downloaded: u64, total: Option<u64>) -> Self {
-        Self { phase, downloaded, total }
+        Self {
+            phase,
+            downloaded,
+            total,
+        }
     }
 }
 
@@ -138,7 +142,11 @@ async fn download(
             digest.update(&chunk);
             file.write_all(&chunk).map_err(error)?;
             if last_update.elapsed() >= Duration::from_millis(100) {
-                progress(DownloadProgress::new(DownloadPhase::Downloading, size, total));
+                progress(DownloadProgress::new(
+                    DownloadPhase::Downloading,
+                    size,
+                    total,
+                ));
                 last_update = std::time::Instant::now();
             }
         }
@@ -148,7 +156,11 @@ async fn download(
         }
         file.sync_all().map_err(error)?;
         drop(file);
-        progress(DownloadProgress::new(DownloadPhase::Installing, size, total));
+        progress(DownloadProgress::new(
+            DownloadPhase::Installing,
+            size,
+            total,
+        ));
         std::fs::rename(&temporary, destination).map_err(error)
     }
     .await;
@@ -416,7 +428,9 @@ mod tests {
         let versions = paper_versions().await.unwrap();
         assert!(versions.iter().any(|v| v == "1.21.11"));
         let progress_events = std::sync::Mutex::new(Vec::new());
-        let report = |event| { progress_events.lock().unwrap().push(event); };
+        let report = |event| {
+            progress_events.lock().unwrap().push(event);
+        };
         let major = install_paper("1.21.11", &root.join("server"), &report)
             .await
             .unwrap();
@@ -429,16 +443,29 @@ mod tests {
         {
             let events = progress_events.lock().unwrap();
             assert_eq!(events.first().unwrap().phase, DownloadPhase::Resolving);
-            assert!(events.iter().any(|event| event.phase == DownloadPhase::Downloading));
-            assert!(events.iter().any(|event| event.phase == DownloadPhase::Verifying));
+            assert!(events
+                .iter()
+                .any(|event| event.phase == DownloadPhase::Downloading));
+            assert!(events
+                .iter()
+                .any(|event| event.phase == DownloadPhase::Verifying));
             assert_eq!(events.last().unwrap().phase, DownloadPhase::Installing);
-            assert!(events.windows(2).all(|pair| pair[0].downloaded <= pair[1].downloaded));
+            assert!(events
+                .windows(2)
+                .all(|pair| pair[0].downloaded <= pair[1].downloaded));
             let final_event = events.last().unwrap();
-            assert_eq!(final_event.downloaded, root.join("server/server.jar").metadata().unwrap().len());
-            if let Some(total) = final_event.total { assert_eq!(final_event.downloaded, total); }
+            assert_eq!(
+                final_event.downloaded,
+                root.join("server/server.jar").metadata().unwrap().len()
+            );
+            if let Some(total) = final_event.total {
+                assert_eq!(final_event.downloaded, total);
+            }
         }
         // Reinstall over the existing JAR too: retrying must remain safe.
-        install_paper("1.21.11", &root.join("server"), &|_| {}).await.unwrap();
+        install_paper("1.21.11", &root.join("server"), &|_| {})
+            .await
+            .unwrap();
         // Never accept the Minecraft EULA or start a Minecraft server in an automated test.
         assert!(!root.join("server/eula.txt").exists());
     }
