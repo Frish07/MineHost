@@ -166,15 +166,36 @@ async fn paper_versions() -> Result<Vec<String>> {
 }
 
 #[tauri::command]
-async fn install_paper(state: State<'_, Shared>, id: String) -> Result<()> {
-    let _operation = begin(&state, &id)?;
-    let (mut server, dir) = {
+async fn install_paper(
+    state: State<'_, Shared>,
+    id: String,
+    on_progress: tauri::ipc::Channel<runtime::DownloadProgress>,
+) -> Result<()> {
+    let operation = begin(&state, &id)?;
+    let (server, dir) = {
         let inner = lock(&state)?;
         (load(&inner, &id)?, directory(&inner, &id)?)
     };
-    server.java_major = runtime::install_paper(&server.version, &dir).await?;
+    let report = |progress| { let _ = on_progress.send(progress); };
+    let major = runtime::install_paper(&server.version, &dir, &report)
+        .await
+        .map_err(|e| format!("Paper {}: {e}", server.version))?;
+    let size = std::fs::metadata(dir.join("server.jar")).map_err(error)?.len();
+    finish_paper_install(operation, major)?;
+    let _ = on_progress.send(runtime::DownloadProgress::new(
+        runtime::DownloadPhase::Complete, size, Some(size),
+    ));
+    Ok(())
+}
+
+fn finish_paper_install(operation: Operation, java_major: u32) -> Result<()> {
+    // A named guard is dropped BEFORE Operation::drop locks the state again.
+    // Never use save(&*lock(...)?, ...) as a tail expression here (Rust 2021).
+    let inner = lock(&operation.shared)?;
+    let mut server = load(&inner, &operation.id)?;
+    server.java_major = java_major;
     server.installed = true;
-    save(&*lock(&state)?, &server)
+    save(&inner, &server)
 }
 
 #[tauri::command]
@@ -622,5 +643,32 @@ mod tests {
         assert!(begin(&state, &id).is_ok());
         lock(&state).unwrap().busy.insert("java-install".into());
         assert!(begin(&state, &id).is_err());
+    }
+
+    #[test]
+    fn paper_install_finishes_and_releases_state_on_success_and_error() {
+        for fail_save in [false, true] {
+            let state = memory_state();
+            let id: String = lock(&state).unwrap().db.query_row("SELECT id FROM servers", [], |row| row.get(0)).unwrap();
+            let operation = begin(&state, &id).unwrap();
+            if fail_save {
+                lock(&state).unwrap().db.execute_batch("DROP TABLE servers;").unwrap();
+            }
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = finish_paper_install(operation, 25);
+                let inner = state.try_lock().expect("Paper completion kept the state locked");
+                assert!(!inner.busy.contains(&id));
+                if !fail_save {
+                    let profile = load(&inner, &id).unwrap();
+                    assert!(profile.installed);
+                    assert_eq!(profile.java_major, 25);
+                }
+                sender.send(result).unwrap();
+            });
+            let result = receiver.recv_timeout(std::time::Duration::from_secs(3))
+                .expect("Paper completion deadlocked instead of releasing its operation guard");
+            assert_eq!(result.is_err(), fail_save);
+        }
     }
 }

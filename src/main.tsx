@@ -1,10 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import './style.css';
+import { downloadLabels, downloadPercentage, downloadedSize, type DownloadProgress } from './download';
+
+function PaperDownloadStatus({progress, language}: {progress: DownloadProgress; language: 'ru' | 'en'}) {
+  const labels = downloadLabels[language];
+  const percent = downloadPercentage(progress);
+  const amount = downloadedSize(progress.downloaded, language);
+  const total = progress.total === null ? '' : ` / ${downloadedSize(progress.total, language)}`;
+  return <div className={`download-status ${progress.phase === 'failed' ? 'failed' : ''}`}>
+    <div className="download-heading"><strong role="status">{labels[progress.phase]}</strong><span>{percent === undefined ? '…' : `${percent}%`}</span></div>
+    <progress aria-label={labels.title} aria-valuetext={`${labels[progress.phase]} ${amount}${total}`} max={100} value={percent}/>
+    <div className="download-details">{amount}{total}</div>
+    {progress.error && <p role="alert">{progress.error}</p>}
+  </div>;
+}
 
 type Server = { id: string; name: string; version: string; port: number; ramMb: number; eula: boolean; installed: boolean; javaMajor: number; running: boolean; busy: boolean };
 type Runtime = {path: string; major: number};
@@ -26,6 +40,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [failure, setFailure] = useState(false);
   const [working, setWorking] = useState(false);
+  const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
   const [creating, setCreating] = useState(false);
   const [versions, setVersions] = useState<string[]>([]);
   const [name, setName] = useState('Survival');
@@ -51,7 +66,7 @@ function App() {
     setSelected(current => list.some(s => s.id === current) ? current : list[0]?.id ?? '');
   }, []);
   const act = useCallback(async (fn: () => Promise<unknown>) => {
-    setWorking(true); setMessage('');
+    setWorking(true); setMessage(''); setFailure(false);
     try { const result = await fn(); setMessage(typeof result === 'string' ? result : t.done); setFailure(false); }
     catch (e) { setMessage(String(e)); setFailure(true); }
     finally { setWorking(false); await refresh().catch(e => {setMessage(String(e)); setFailure(true);}); }
@@ -93,6 +108,20 @@ function App() {
   }, [selected, page]);
   useEffect(() => { if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight; }, [logs]);
   const call = (method: string, args: Record<string, unknown> = {}) => act(() => invoke(method, {id: selected, ...args}));
+  const downloadPaper = () => {
+    const id = selected;
+    void act(async () => {
+      setDownloads(current => ({...current, [id]: {phase: 'resolving', downloaded: 0, total: null}}));
+      const onProgress = new Channel<DownloadProgress>();
+      onProgress.onmessage = progress => setDownloads(current => ({...current, [id]: progress}));
+      try {
+        await invoke('install_paper', {id, onProgress});
+      } catch (error) {
+        setDownloads(current => ({...current, [id]: {...current[id], phase: 'failed', error: String(error)}}));
+        throw error;
+      }
+    });
+  };
   const loadVersions = () => act(async () => { const values = await invoke<string[]>('paper_versions'); setVersions(values); if (values[0]) setVersion(values[0]); });
   const importFiles = () => act(async () => {
     const result = await open({multiple: true, directory: false, filters: [{name: 'Java plugin', extensions: ['jar']}]});
@@ -119,11 +148,11 @@ function App() {
             <div className="server-banner"><span className="terrain">▰</span><span className={`status ${s.running ? 'online' : ''}`}>● {s.busy ? t.busy : s.running ? t.online : t.offline}</span></div>
             <div className="card-body"><div className="server-name"><h2>{s.name}</h2><span>PAPER</span></div><p className="muted">Minecraft {s.version} · {s.ramMb} MiB</p><div className="address">127.0.0.1:{s.port}<span>JAVA</span></div><div className="card-actions"><button className={s.running ? 'danger' : 'primary'} disabled={working || s.busy} onClick={() => {setSelected(s.id); void act(() => invoke(s.running ? 'stop_server' : 'start_server', {id:s.id, customPath: ''}));}}>{s.running ? '■' : '▶'} {s.running ? t.stop : t.start}</button><button onClick={() => {setSelected(s.id); setPage(s.installed ? 'console' : 'software');}}>→</button></div></div>
           </article>)}</div>
-        </> : page === 'settings' ? <section className="panel"><h2>MineHost 0.1.0</h2><p>{t.notice}</p><p>{t.closeWarning}</p><p className="muted">Tauri 2 · Rust · React · SQLite</p><p className="muted">GitHub Actions → Windows x64 → SHA-256</p></section> : <>
+        </> : page === 'settings' ? <section className="panel"><h2>MineHost 0.1.1</h2><p>{t.notice}</p><p>{t.closeWarning}</p><p className="muted">Tauri 2 · Rust · React · SQLite</p><p className="muted">GitHub Actions → Windows x64 → SHA-256</p></section> : <>
           <div className="server-toolbar"><select aria-label={t.choose} value={selected} onChange={e => setSelected(e.target.value)}><option value="" disabled>{t.choose}</option>{servers.map(s => <option key={s.id} value={s.id}>{s.name} · :{s.port}</option>)}</select><span className={`status ${server?.running ? 'online' : ''}`}>● {server?.running ? t.online : t.offline}</span><button disabled={!server || locked} onClick={() => call('open_folder')}>{t.folder}</button><button disabled={working} onClick={() => act(refresh)}>{t.refresh}</button></div>
           {server && <>
             {page === 'console' && <section className="panel console-panel"><div className="panel-heading"><h2>{server.name}</h2><button className={server.running ? 'danger' : 'primary'} disabled={locked} onClick={() => call(server.running ? 'stop_server' : 'start_server', {customPath: javaPath})}>{server.running ? t.stop : t.start}</button></div><p className="muted">{t.consoleHint}</p><input placeholder={t.search} value={search} onChange={e => setSearch(e.target.value)}/><pre ref={logBox} className="logs" aria-live="off">{logs.filter(line => line.toLowerCase().includes(search.toLowerCase())).join('\n')}</pre><form className="command-line" onSubmit={e => {e.preventDefault(); const value = command; void act(async () => {await invoke('send_command', {id: selected, command: value}); setHistory(h => [value, ...h].slice(0,100)); setHistoryIndex(-1); setCommand('');});}}><span>›</span><input placeholder={t.command} value={command} disabled={!server.running || working} onChange={e => setCommand(e.target.value)} onKeyDown={e => {if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {e.preventDefault(); const i = Math.max(-1, Math.min(history.length - 1, historyIndex + (e.key === 'ArrowUp' ? 1 : -1))); setHistoryIndex(i); setCommand(history[i] ?? '');}}}/><button disabled={!server.running || working || !command.trim()}>{t.send}</button></form></section>}
-            {page === 'software' && <section className="panel"><div className="panel-heading"><h2>Paper {server.version}</h2><span className="tag">Java {server.javaMajor}</span></div><p className="muted">{t.stoppedOnly}</p><button className="primary" disabled={cannotEdit} onClick={() => call('install_paper')}>↓ {t.install}</button><div className="divider"/><label className="check"><input type="checkbox" checked={server.eula} disabled={cannotEdit || server.eula || !server.installed} onChange={e => {if(e.target.checked) void call('accept_eula', {consent:true});}}/>{t.eula}</label><p className="muted selectable">https://www.minecraft.net/eula</p><div className="divider"/><h2>Java runtime</h2><p className="muted">Temurin JRE · Windows x64 · SHA-256</p><label>{t.javaPath}<input placeholder="C:\Program Files\...\bin\java.exe" value={javaPath} onChange={e => setJavaPath(e.target.value)}/></label><div className="button-row"><button disabled={locked || !server.installed} onClick={() => act(async () => {const info = await invoke<Runtime>('java_status', {id:selected, customPath:javaPath}); setJavaInfo(`Java ${info.major} · ${info.path}`);})}>{t.checkJava}</button><button disabled={cannotEdit || !server.installed} onClick={() => {if (window.confirm(t.confirmedJava)) void act(async () => {const info = await invoke<Runtime>('install_java', {id: selected, consent:true}); setJavaInfo(`Java ${info.major} · ${info.path}`);});}}>{t.downloadJava}</button><button className="primary" disabled={locked || !server.eula || !server.installed || server.running} onClick={() => call('start_server', {customPath:javaPath})}>▶ {t.start}</button></div><p className="muted selectable">{javaInfo}</p></section>}
+            {page === 'software' && <section className="panel"><div className="panel-heading"><h2>Paper {server.version}</h2><span className="tag">Java {server.javaMajor}</span></div><p className="muted">{t.stoppedOnly}</p><button className="primary" disabled={cannotEdit} onClick={downloadPaper}>↓ {t.install}</button>{downloads[server.id] && <PaperDownloadStatus progress={downloads[server.id]} language={language}/>}<div className="divider"/><label className="check"><input type="checkbox" checked={server.eula} disabled={cannotEdit || server.eula || !server.installed} onChange={e => {if(e.target.checked) void call('accept_eula', {consent:true});}}/>{t.eula}</label><p className="muted selectable">https://www.minecraft.net/eula</p><div className="divider"/><h2>Java runtime</h2><p className="muted">Temurin JRE · Windows x64 · SHA-256</p><label>{t.javaPath}<input placeholder="C:\Program Files\...\bin\java.exe" value={javaPath} onChange={e => setJavaPath(e.target.value)}/></label><div className="button-row"><button disabled={locked || !server.installed} onClick={() => act(async () => {const info = await invoke<Runtime>('java_status', {id:selected, customPath:javaPath}); setJavaInfo(`Java ${info.major} · ${info.path}`);})}>{t.checkJava}</button><button disabled={cannotEdit || !server.installed} onClick={() => {if (window.confirm(t.confirmedJava)) void act(async () => {const info = await invoke<Runtime>('install_java', {id: selected, consent:true}); setJavaInfo(`Java ${info.major} · ${info.path}`);});}}>{t.downloadJava}</button><button className="primary" disabled={locked || !server.eula || !server.installed || server.running} onClick={() => call('start_server', {customPath:javaPath})}>▶ {t.start}</button></div><p className="muted selectable">{javaInfo}</p></section>}
             {page === 'plugins' && <section className="panel drop-zone"><div className="world-icon">◇</div><h2>Paper / Bukkit · .jar</h2><p className="muted">{t.stoppedOnly}</p><label className="check"><input type="checkbox" checked={pluginConsent} onChange={e => setPluginConsent(e.target.checked)}/>{t.pluginRisk}</label><button className="primary" disabled={cannotEdit || !pluginConsent} onClick={importFiles}>{t.plugin}</button><p className="muted">Drag & drop · .jar · max 256 MiB</p></section>}
             {page === 'properties' && <section className="panel"><h2>server.properties</h2><p className="muted">{t.propertiesHint}</p><textarea className="properties" spellCheck={false} value={properties} disabled={cannotEdit} onChange={e => setProperties(e.target.value)}/><div className="button-row"><button className="primary" disabled={cannotEdit} onClick={() => call('save_properties', {content:properties})}>{t.save}</button><button className="danger" disabled={cannotEdit} onClick={() => {const confirmation = window.prompt(`${t.typeDelete}\n${server.name}`); if (confirmation !== null) void call('delete_server', {confirmation});}}>{t.delete}</button></div></section>}
             {page === 'backups' && <section className="panel"><h2>{t.backups}</h2><p className="muted">{t.backupsHint}</p><button className="primary" disabled={cannotEdit} onClick={() => call('backup_server')}>{t.backup}</button></section>}

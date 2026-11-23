@@ -9,7 +9,31 @@ use std::{
     time::Duration,
 };
 
-const USER_AGENT: &str = "MineHost/0.1.0 (https://github.com/Frish07/MineHost)";
+const USER_AGENT: &str = "MineHost/0.1.1 (https://github.com/Frish07/MineHost)";
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DownloadPhase {
+    Resolving,
+    Downloading,
+    Verifying,
+    Installing,
+    Complete,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub phase: DownloadPhase,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
+impl DownloadProgress {
+    pub fn new(phase: DownloadPhase, downloaded: u64, total: Option<u64>) -> Self {
+        Self { phase, downloaded, total }
+    }
+}
 
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -72,7 +96,12 @@ fn minimum_java(metadata: &Value) -> Result<u32> {
     Ok(major as u32)
 }
 
-async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
+async fn download(
+    url: &str,
+    checksum: &str,
+    destination: &Path,
+    progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+) -> Result<()> {
     if checksum.len() != 64 || !checksum.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid SHA-256 from provider".into());
     }
@@ -91,6 +120,8 @@ async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
             .map_err(error)?
             .error_for_status()
             .map_err(error)?;
+        let total = response.content_length();
+        progress(DownloadProgress::new(DownloadPhase::Downloading, 0, total));
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -98,6 +129,7 @@ async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
             .map_err(error)?;
         let mut digest = Sha256::new();
         let mut size: u64 = 0;
+        let mut last_update = std::time::Instant::now();
         while let Some(chunk) = response.chunk().await.map_err(error)? {
             size += chunk.len() as u64;
             if size > 512 * 1024 * 1024 {
@@ -105,12 +137,18 @@ async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
             }
             digest.update(&chunk);
             file.write_all(&chunk).map_err(error)?;
+            if last_update.elapsed() >= Duration::from_millis(100) {
+                progress(DownloadProgress::new(DownloadPhase::Downloading, size, total));
+                last_update = std::time::Instant::now();
+            }
         }
+        progress(DownloadProgress::new(DownloadPhase::Verifying, size, total));
         if size == 0 || format!("{:x}", digest.finalize()) != checksum.to_ascii_lowercase() {
             return Err("Download SHA-256 mismatch".into());
         }
         file.sync_all().map_err(error)?;
         drop(file);
+        progress(DownloadProgress::new(DownloadPhase::Installing, size, total));
         std::fs::rename(&temporary, destination).map_err(error)
     }
     .await;
@@ -120,7 +158,12 @@ async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
     result
 }
 
-pub async fn install_paper(version: &str, directory: &Path) -> Result<u32> {
+pub async fn install_paper(
+    version: &str,
+    directory: &Path,
+    progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+) -> Result<u32> {
+    progress(DownloadProgress::new(DownloadPhase::Resolving, 0, None));
     safety::version(version)?;
     let metadata: Value = client()?
         .get(format!(
@@ -149,12 +192,12 @@ pub async fn install_paper(version: &str, directory: &Path) -> Result<u32> {
     let build = builds
         .iter()
         .find(|v| v["channel"] == "STABLE")
-        .ok_or("This Minecraft version has no stable Paper build")?;
+        .ok_or_else(|| format!("No stable Paper build for Minecraft {version}. Choose a released Minecraft version; unstable builds are not installed automatically."))?;
     let artifact = &build["downloads"]["server:default"];
     let url = required_text(artifact, "/url")?;
     let checksum = required_text(artifact, "/checksums/sha256")?;
     let major = minimum_java(&metadata)?;
-    download(url, checksum, &directory.join("server.jar")).await?;
+    download(url, checksum, &directory.join("server.jar"), progress).await?;
     Ok(major)
 }
 
@@ -289,6 +332,7 @@ pub async fn install_java(root: &Path, major: u32) -> Result<Runtime> {
         required_text(binary, "/link")?,
         required_text(binary, "/checksum")?,
         &archive_path,
+        &|_| {},
     )
     .await?;
     let staging = root
@@ -371,7 +415,9 @@ mod tests {
         }
         let versions = paper_versions().await.unwrap();
         assert!(versions.iter().any(|v| v == "1.21.11"));
-        let major = install_paper("1.21.11", &root.join("server"))
+        let progress_events = std::sync::Mutex::new(Vec::new());
+        let report = |event| { progress_events.lock().unwrap().push(event); };
+        let major = install_paper("1.21.11", &root.join("server"), &report)
             .await
             .unwrap();
         assert_eq!(major, 21);
@@ -380,6 +426,19 @@ mod tests {
         assert!(Path::new(&java.path).is_file());
         assert!(detect_java(&root, major, "").is_ok());
         assert!(root.join("server/server.jar").metadata().unwrap().len() > 1_000_000);
+        {
+            let events = progress_events.lock().unwrap();
+            assert_eq!(events.first().unwrap().phase, DownloadPhase::Resolving);
+            assert!(events.iter().any(|event| event.phase == DownloadPhase::Downloading));
+            assert!(events.iter().any(|event| event.phase == DownloadPhase::Verifying));
+            assert_eq!(events.last().unwrap().phase, DownloadPhase::Installing);
+            assert!(events.windows(2).all(|pair| pair[0].downloaded <= pair[1].downloaded));
+            let final_event = events.last().unwrap();
+            assert_eq!(final_event.downloaded, root.join("server/server.jar").metadata().unwrap().len());
+            if let Some(total) = final_event.total { assert_eq!(final_event.downloaded, total); }
+        }
+        // Reinstall over the existing JAR too: retrying must remain safe.
+        install_paper("1.21.11", &root.join("server"), &|_| {}).await.unwrap();
         // Never accept the Minecraft EULA or start a Minecraft server in an automated test.
         assert!(!root.join("server/eula.txt").exists());
     }

@@ -55,6 +55,8 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Check TypeScript
         run: npm run typecheck
+      - name: Test download progress states
+        run: npm test
       - name: Build frontend
         run: npm run build
       - name: Clippy
