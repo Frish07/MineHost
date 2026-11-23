@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+    <parameter name="productVersion" required="true" />
+    <parameter name="fileVersion" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="MineHost_${version}_x64-setup.exe" product-name="MineHost" product-version="${productVersion}" file-version="${fileVersion}">
+      <authenticode-sign hash-algorithm="sha256" description="MineHost installer" description-url="https://github.com/Frish07/MineHost" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

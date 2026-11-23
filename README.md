@@ -39,6 +39,10 @@ Build проверяет форматирование, Clippy, тесты Rust, 
 
 Тег `v0.1.1` запускает отдельный release workflow с повторением всех проверок, проверкой версии и публикацией GitHub Release. Тег нужно ставить **после** появления закоммиченных lock-файлов и успешного Build. Без локального Git это делает workflow **Create version tag** в Actions. Начальные версии публикуются с отметкой Pre-release; готовность всех этапов исходного задания не заявляется.
 
+## Code signing policy
+
+Бесплатная подпись через SignPath Foundation подготовлена, но **одобрение проекта ещё не получено, текущие релизы не подписаны**. После подключения подписываются приложение и установщик в GitHub Actions; каждое подписание требует подтверждения владельца в SignPath. Включённый режим подписи запрещает публикацию при ошибке или отсутствии подписи. [Code signing policy](https://github.com/Frish07/MineHost/blob/main/CODE_SIGNING_POLICY.md), [настройка](docs/CODE_SIGNING.md), [privacy policy](https://github.com/Frish07/MineHost/blob/main/PRIVACY.md).
+
 ## Данные и ограничения
 
 Данные: `%LOCALAPPDATA%\dev.frish07.minehost\`: `servers/<UUID>`, `backups`, `cache`, `logs`, `config/minehost.sqlite`, `runtimes`, `trash`. Системные каталоги сервера не используются. Резервные копии создаются только при остановленном сервере. Восстановление в GUI пока не реализовано; сохраните архив отдельно и восстанавливайте файлы остановленного профиля вручную.

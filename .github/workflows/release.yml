@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -28,6 +29,10 @@ jobs:
   build:
     needs: validate
     uses: ./.github/workflows/build.yml
+    with:
+      sign_windows: ${{ vars.WINDOWS_SIGNING_ENABLED == 'true' }}
+    secrets:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
   publish:
     needs: build
     runs-on: windows-latest
@@ -35,6 +40,7 @@ jobs:
       contents: write
       actions: read
     steps:
+      - uses: actions/checkout@v4.2.2
       - uses: actions/download-artifact@v4.3.0
         with:
           name: MineHost-windows-x64
@@ -48,18 +54,31 @@ jobs:
             if ((Get-FileHash "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Hash mismatch: $file" }
           }
           if (@(Get-ChildItem artifacts/*.exe).Count -lt 2) { throw 'Missing release binaries' }
+      - name: Require Authenticode verification when signing is enabled
+        if: vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts/*.exe | ForEach-Object {
+            ./scripts/Assert-WindowsSignature.ps1 -Path $_.FullName
+          }
       - name: Publish only verified artifacts
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
+          SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
         run: |
           gh release view $env:RELEASE_TAG *> $null
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to replace published binaries' }
           $assets = @(Get-ChildItem artifacts/*.exe | ForEach-Object FullName)
           $assets += (Resolve-Path artifacts/SHA256SUMS.txt).Path
-          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --notes-file artifacts/README.md --title "MineHost $env:RELEASE_TAG" --draft --prerelease
+          $assets += (Resolve-Path artifacts/CODE_SIGNING_POLICY.md).Path
+          $signingStatus = if ($env:SIGNING_ENABLED -ceq 'true') { 'Windows application and installer passed trusted Authenticode signature verification.' } else { 'Unsigned release: SignPath Foundation enrollment is pending. Windows SmartScreen may show Unknown publisher.' }
+          $policyUrl = "https://github.com/$env:GH_REPO/blob/$env:RELEASE_TAG/CODE_SIGNING_POLICY.md"
+          $notes = "## Code signing policy`n`n$signingStatus`n`nPolicy: $policyUrl`n`n" + (Get-Content artifacts/README.md -Raw)
+          $notes | Set-Content release-notes.md -Encoding utf8NoBOM
+          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --notes-file release-notes.md --title "MineHost $env:RELEASE_TAG" --draft --prerelease
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -6,20 +6,48 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      sign_windows:
+        description: Require SignPath production signing for the application and installer
+        type: boolean
+        default: false
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v4.2.2
+      - name: Validate signing enrollment before building
+        if: inputs.sign_windows
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_APP_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_APP_CONFIGURATION_SLUG }}
+          SIGNPATH_INSTALLER_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_CONFIGURATION_SLUG }}
+          SIGNING_REF: ${{ github.ref }}
+          SIGNING_EVENT: ${{ github.event_name }}
+        run: |
+          if ($env:SIGNING_EVENT -eq 'pull_request' -or $env:SIGNING_REF -notmatch '^refs/tags/v') {
+            throw 'Production signing is allowed only for version tags, never pull requests or branch builds'
+          }
+          foreach ($name in @('SIGNPATH_API_TOKEN','SIGNPATH_ORGANIZATION_ID','SIGNPATH_PROJECT_SLUG','SIGNPATH_SIGNING_POLICY_SLUG','SIGNPATH_APP_CONFIGURATION_SLUG','SIGNPATH_INSTALLER_CONFIGURATION_SLUG')) {
+            if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing signing configuration: $name. Complete docs/CODE_SIGNING.md first." }
+          }
       - name: Require committed lockfiles
         shell: pwsh
         run: |
@@ -67,8 +95,109 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked managed_java_download_and_paper_contract -- --ignored --nocapture
       - name: Build Rust backend
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
-      - name: Package Windows x64 installer
-        run: node ./node_modules/@tauri-apps/cli/tauri.js build --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+      - name: Build production application before packaging
+        run: node ./node_modules/@tauri-apps/cli/tauri.js build --ci --target x86_64-pc-windows-msvc --no-bundle -- --locked
+      - name: Prepare exact application signing payload
+        if: inputs.sign_windows
+        id: app-metadata
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path signing-input/app -Force | Out-Null
+          Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe signing-input/app/minehost.exe
+          ./scripts/Get-SigningMetadata.ps1 -Path signing-input/app/minehost.exe -WriteGithubOutputs
+      - name: Upload application for verified build provenance
+        if: inputs.sign_windows
+        id: unsigned-app
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: MineHost-signing-input-app
+          path: signing-input/app/minehost.exe
+          if-no-files-found: error
+      - name: Request application signature (owner approval required in SignPath)
+        if: inputs.sign_windows
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3, pinned
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APP_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: signing-output/app
+          parameters: |
+            version: ${{ toJSON(steps.app-metadata.outputs.version) }}
+            productVersion: ${{ toJSON(steps.app-metadata.outputs.product-version) }}
+            fileVersion: ${{ toJSON(steps.app-metadata.outputs.file-version) }}
+      - name: Verify application signature and install signed binary for packaging
+        if: inputs.sign_windows
+        shell: pwsh
+        run: |
+          ./scripts/Assert-WindowsSignature.ps1 -Path signing-output/app/minehost.exe
+          Copy-Item signing-output/app/minehost.exe src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe -Force
+      - name: Package existing application without modifying its signature
+        run: node ./node_modules/@tauri-apps/cli/tauri.js bundle --ci --target x86_64-pc-windows-msvc --bundles nsis --no-binary-patching
+      - name: Prepare exact installer signing payload
+        if: inputs.sign_windows
+        id: installer-metadata
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installer = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/MineHost_${version}_x64-setup.exe"
+          New-Item -ItemType Directory -Path signing-input/installer -Force | Out-Null
+          Copy-Item $installer signing-input/installer/
+          ./scripts/Get-SigningMetadata.ps1 -Path $installer -WriteGithubOutputs
+      - name: Upload installer for verified build provenance
+        if: inputs.sign_windows
+        id: unsigned-installer
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: MineHost-signing-input-installer
+          path: signing-input/installer/*.exe
+          if-no-files-found: error
+      - name: Request installer signature (owner approval required in SignPath)
+        if: inputs.sign_windows
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3, pinned
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: signing-output/installer
+          parameters: |
+            version: ${{ toJSON(steps.installer-metadata.outputs.version) }}
+            productVersion: ${{ toJSON(steps.installer-metadata.outputs.product-version) }}
+            fileVersion: ${{ toJSON(steps.installer-metadata.outputs.file-version) }}
+      - name: Verify both signed files and preserve signed application inside installer
+        if: inputs.sign_windows
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installerName = "MineHost_${version}_x64-setup.exe"
+          ./scripts/Assert-WindowsSignature.ps1 -Path "signing-output/installer/$installerName"
+          ./scripts/Assert-WindowsSignature.ps1 -Path src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe
+          $before = (Get-FileHash signing-output/app/minehost.exe -Algorithm SHA256).Hash
+          $after = (Get-FileHash src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe -Algorithm SHA256).Hash
+          if ($before -cne $after) { throw 'Bundling changed the signed application; refusing to publish' }
+          Copy-Item "signing-output/installer/$installerName" "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/$installerName" -Force
+      - name: Validate metadata used by the SignPath configurations
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          ./scripts/Get-SigningMetadata.ps1 -Path src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe
+          ./scripts/Get-SigningMetadata.ps1 -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/MineHost_${version}_x64-setup.exe"
+      - name: Ensure unsigned files are rejected by the signature verifier
+        if: ${{ !inputs.sign_windows }}
+        shell: pwsh
+        run: |
+          $rejected = $false
+          try { ./scripts/Assert-WindowsSignature.ps1 -Path src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe } catch { $rejected = $true }
+          if (!$rejected) { throw 'Unsigned executable was incorrectly accepted by the signature verifier' }
       - name: Smoke test packaged application startup on Windows runner
         shell: pwsh
         run: |
@@ -92,7 +221,8 @@ jobs:
           $binary = 'src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe'
           if (!(Test-Path $binary)) { throw 'Standalone executable was not produced' }
           Copy-Item $binary artifacts/MineHost-windows-x64.exe
-          $installers = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe')
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installers = @(Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/MineHost_${version}_x64-setup.exe")
           if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
           Copy-Item $installers[0].FullName artifacts/
           $sums = Get-ChildItem artifacts/*.exe | Sort-Object Name | ForEach-Object {
@@ -100,6 +230,7 @@ jobs:
           }
           $sums | Set-Content artifacts/SHA256SUMS.txt -Encoding utf8NoBOM
           Copy-Item README.md,LICENSE artifacts/
+          Copy-Item CODE_SIGNING_POLICY.md artifacts/
       - uses: actions/upload-artifact@v4.6.2
         with:
           name: MineHost-windows-x64
