@@ -59,6 +59,17 @@ fn required_text<'a>(value: &'a Value, pointer: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("Missing API field {pointer}"))
 }
 
+fn minimum_java(metadata: &Value) -> Result<u32> {
+    let major = metadata
+        .pointer("/version/java/version/minimum")
+        .and_then(Value::as_u64)
+        .ok_or("Paper did not specify its minimum Java version; automatic installation is unsafe")?;
+    if !(8..=50).contains(&major) {
+        return Err("Unsupported Java major in Paper metadata".into());
+    }
+    Ok(major as u32)
+}
+
 async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
     if checksum.len() != 64 || !checksum.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid SHA-256 from provider".into());
@@ -140,11 +151,7 @@ pub async fn install_paper(version: &str, directory: &Path) -> Result<u32> {
     let artifact = &build["downloads"]["server:default"];
     let url = required_text(artifact, "/url")?;
     let checksum = required_text(artifact, "/checksums/sha256")?;
-    let major = metadata
-        .pointer("/version/java/version/minimum")
-        .and_then(Value::as_u64)
-        .ok_or("Paper did not specify its minimum Java version; automatic installation is unsafe")?
-        as u32;
+    let major = minimum_java(&metadata)?;
     download(url, checksum, &directory.join("server.jar")).await?;
     Ok(major)
 }
@@ -335,4 +342,37 @@ pub async fn install_java(root: &Path, major: u32) -> Result<Runtime> {
     let _ = std::fs::remove_file(&archive_path);
     // Failed staging directories are retained for inspection; never recursively delete untrusted archives.
     extracted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn java_requirement_comes_from_version_metadata() {
+        let metadata = serde_json::json!({"version":{"id":"1.21.11","java":{"version":{"minimum":21}}}});
+        assert_eq!(minimum_java(&metadata).unwrap(), 21);
+        assert!(minimum_java(&serde_json::json!({"downloads":{}})).is_err());
+        assert!(minimum_java(&serde_json::json!({"version":{"java":{"version":{"minimum":999}}}})).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Real network and runtime download; run explicitly on GitHub Actions only"]
+    async fn managed_java_download_and_paper_contract() {
+        let root = std::env::temp_dir().join(format!("minehost-ci-{}", uuid::Uuid::new_v4()));
+        for dir in ["cache", "runtimes", "server"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let versions = paper_versions().await.unwrap();
+        assert!(versions.iter().any(|v| v == "1.21.11"));
+        let major = install_paper("1.21.11", &root.join("server")).await.unwrap();
+        assert_eq!(major, 21);
+        let java = install_java(&root, major).await.unwrap();
+        assert_eq!(java.major, major);
+        assert!(Path::new(&java.path).is_file());
+        assert!(detect_java(&root, major, "").is_ok());
+        assert!(root.join("server/server.jar").metadata().unwrap().len() > 1_000_000);
+        // Never accept the Minecraft EULA or start a Minecraft server in an automated test.
+        assert!(!root.join("server/eula.txt").exists());
+    }
 }

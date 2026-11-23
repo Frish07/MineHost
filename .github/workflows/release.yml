@@ -57,7 +57,9 @@ jobs:
         run: |
           gh release view $env:RELEASE_TAG *> $null
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to replace published binaries' }
-          gh release create $env:RELEASE_TAG artifacts/*.exe artifacts/SHA256SUMS.txt --verify-tag --generate-notes --title "MineHost $env:RELEASE_TAG" --draft
+          $assets = @(Get-ChildItem artifacts/*.exe | ForEach-Object FullName)
+          $assets += (Resolve-Path artifacts/SHA256SUMS.txt).Path
+          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --notes-file artifacts/README.md --title "MineHost $env:RELEASE_TAG" --draft --prerelease
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

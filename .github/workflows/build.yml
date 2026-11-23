@@ -34,6 +34,7 @@ jobs:
       - name: Install pinned Rust and components on runner
         run: rustup show
       - uses: actions/cache@v4.2.4
+        id: cargo-cache
         with:
           path: |
             ~/.cargo/registry
@@ -60,6 +61,8 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Verify real Paper downloads and consent-gated Java runtime installer on runner
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked managed_java_download_and_paper_contract -- --ignored --nocapture
       - name: Build Rust backend
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
       - name: Package Windows x64 installer
@@ -85,3 +88,12 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
+      - name: Preserve dependency compilation after a failed check
+        if: failure() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
