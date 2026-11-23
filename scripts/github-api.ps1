@@ -12,7 +12,7 @@ if ($LASTEXITCODE -ne 0) { throw 'GitHub authentication is unavailable' }
 $token = ($credentialText | Where-Object { $_ -like 'password=*' } | Select-Object -First 1) -replace '^password=', ''
 if (!$token) { throw 'Existing GitHub credential not found' }
 $headers = @{Authorization="Bearer $token";Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28';'User-Agent'='MineHost-cloud-build'}
-$parameters = @{Uri="https://api.github.com/$Route";Headers=$headers;Method=$Method}
+$parameters = @{Uri="https://api.github.com/$Route";Headers=$headers;Method=$Method;TimeoutSec=45}
 if ($Body) { $parameters.Body = $Body; $parameters.ContentType='application/json' }
 try {
     $response = Invoke-RestMethod @parameters

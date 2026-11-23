@@ -22,7 +22,7 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $cargo = Get-Content src-tauri/Cargo.toml -Raw
-          if ($env:RELEASE_TAG -cne "v$version" -or $tauriVersion -cne $version -or $cargo -notmatch "(?m)^version = `"$([regex]::Escape($version))`"$") {
+          if ($env:RELEASE_TAG -cne "v$version" -or $tauriVersion -cne $version -or $cargo -notmatch "(?m)^version = `"$([regex]::Escape($version))`"\r?$") {
             throw 'Tag, package.json, Cargo.toml and Tauri versions must match'
           }
   build:

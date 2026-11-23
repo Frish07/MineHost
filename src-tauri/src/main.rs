@@ -106,66 +106,6 @@ fn begin(shared: &Shared, id: &str) -> Result<Operation> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn memory_state() -> Shared {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);").unwrap();
-        let server = Server {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "Test".into(),
-            version: "1.21.11".into(),
-            port: 25565,
-            ram_mb: 2048,
-            eula: false,
-            installed: false,
-            java_major: 21,
-        };
-        let inner = Inner {
-            db,
-            root: std::env::temp_dir(),
-            running: HashMap::new(),
-            busy: HashSet::new(),
-            logs: HashMap::new(),
-        };
-        save(&inner, &server).unwrap();
-        Arc::new(Mutex::new(inner))
-    }
-
-    #[test]
-    fn sqlite_rejects_port_collisions() {
-        let state = memory_state();
-        let inner = lock(&state).unwrap();
-        let json: String = inner
-            .db
-            .query_row("SELECT data FROM servers", [], |row| row.get(0))
-            .unwrap();
-        let mut server: Server = serde_json::from_str(&json).unwrap();
-        server.id = uuid::Uuid::new_v4().to_string();
-        assert!(save(&inner, &server).is_err());
-        server.port += 1;
-        assert!(save(&inner, &server).is_ok());
-    }
-
-    #[test]
-    fn operations_release_the_guard_after_failure() {
-        let state = memory_state();
-        let id: String = lock(&state)
-            .unwrap()
-            .db
-            .query_row("SELECT id FROM servers", [], |row| row.get(0))
-            .unwrap();
-        let operation = begin(&state, &id).unwrap();
-        assert!(begin(&state, &id).is_err());
-        drop(operation);
-        assert!(begin(&state, &id).is_ok());
-        lock(&state).unwrap().busy.insert("java-install".into());
-        assert!(begin(&state, &id).is_err());
-    }
-}
-
 #[tauri::command]
 fn list_servers(state: State<'_, Shared>) -> Result<Vec<ServerView>> {
     let inner = lock(&state)?;
@@ -245,7 +185,7 @@ fn accept_eula(state: State<'_, Shared>, id: String, consent: bool) -> Result<()
     let _operation = begin(&state, &id)?;
     let inner = lock(&state)?;
     let mut server = load(&inner, &id)?;
-    std::fs::write(directory(&inner, &id)?.join("eula.txt"), "eula=true\n").map_err(error)?;
+    safety::atomic_write(&directory(&inner, &id)?.join("eula.txt"), b"eula=true\n")?;
     server.eula = true;
     save(&inner, &server)
 }
@@ -443,7 +383,9 @@ fn server_logs(state: State<'_, Shared>, id: String) -> Result<Vec<String>> {
 fn read_properties(state: State<'_, Shared>, id: String) -> Result<String> {
     let inner = lock(&state)?;
     load(&inner, &id)?;
-    std::fs::read_to_string(directory(&inner, &id)?.join("server.properties")).map_err(error)
+    let file = directory(&inner, &id)?.join("server.properties");
+    safety::reject_links(&file)?;
+    std::fs::read_to_string(file).map_err(error)
 }
 
 #[tauri::command]
@@ -621,4 +563,64 @@ fn main() {
             };
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_state() -> Shared {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);").unwrap();
+        let server = Server {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Test".into(),
+            version: "1.21.11".into(),
+            port: 25565,
+            ram_mb: 2048,
+            eula: false,
+            installed: false,
+            java_major: 21,
+        };
+        let inner = Inner {
+            db,
+            root: std::env::temp_dir(),
+            running: HashMap::new(),
+            busy: HashSet::new(),
+            logs: HashMap::new(),
+        };
+        save(&inner, &server).unwrap();
+        Arc::new(Mutex::new(inner))
+    }
+
+    #[test]
+    fn sqlite_rejects_port_collisions() {
+        let state = memory_state();
+        let inner = lock(&state).unwrap();
+        let json: String = inner
+            .db
+            .query_row("SELECT data FROM servers", [], |row| row.get(0))
+            .unwrap();
+        let mut server: Server = serde_json::from_str(&json).unwrap();
+        server.id = uuid::Uuid::new_v4().to_string();
+        assert!(save(&inner, &server).is_err());
+        server.port += 1;
+        assert!(save(&inner, &server).is_ok());
+    }
+
+    #[test]
+    fn operations_release_the_guard_after_failure() {
+        let state = memory_state();
+        let id: String = lock(&state)
+            .unwrap()
+            .db
+            .query_row("SELECT id FROM servers", [], |row| row.get(0))
+            .unwrap();
+        let operation = begin(&state, &id).unwrap();
+        assert!(begin(&state, &id).is_err());
+        drop(operation);
+        assert!(begin(&state, &id).is_ok());
+        lock(&state).unwrap().busy.insert("java-install".into());
+        assert!(begin(&state, &id).is_err());
+    }
 }
