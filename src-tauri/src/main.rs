@@ -522,6 +522,20 @@ async fn backup_server(state: State<'_, Shared>, id: String) -> Result<String> {
 
 fn main() {
     let app = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).setup(|app| {
+        if let Some(window) = app.get_webview_window("main") {
+            let handle = app.handle().clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    let state = handle.state::<Shared>();
+                    if let Ok(inner) = state.lock() {
+                        if !inner.running.is_empty() || !inner.busy.is_empty() {
+                            api.prevent_close();
+                            let _ = handle.emit("exit-blocked", ());
+                        }
+                    };
+                }
+            });
+        }
         let root = app.path().app_local_data_dir()?;
         for name in ["servers", "backups", "cache", "logs", "config", "runtimes", "trash"] { std::fs::create_dir_all(root.join(name))?; }
         let db = rusqlite::Connection::open(root.join("config/minehost.sqlite"))?;

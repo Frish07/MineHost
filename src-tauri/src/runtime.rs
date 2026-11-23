@@ -109,6 +109,18 @@ async fn download(url: &str, checksum: &str, destination: &Path) -> Result<()> {
 
 pub async fn install_paper(version: &str, directory: &Path) -> Result<u32> {
     safety::version(version)?;
+    let metadata: Value = client()?
+        .get(format!(
+            "https://fill.papermc.io/v3/projects/paper/versions/{version}"
+        ))
+        .send()
+        .await
+        .map_err(error)?
+        .error_for_status()
+        .map_err(error)?
+        .json()
+        .await
+        .map_err(error)?;
     let builds: Vec<Value> = client()?
         .get(format!(
             "https://fill.papermc.io/v3/projects/paper/versions/{version}/builds"
@@ -128,8 +140,8 @@ pub async fn install_paper(version: &str, directory: &Path) -> Result<u32> {
     let artifact = &build["downloads"]["server:default"];
     let url = required_text(artifact, "/url")?;
     let checksum = required_text(artifact, "/checksums/sha256")?;
-    let major = build
-        .pointer("/java/version/minimum")
+    let major = metadata
+        .pointer("/version/java/version/minimum")
         .and_then(Value::as_u64)
         .ok_or("Paper did not specify its minimum Java version; automatic installation is unsafe")?
         as u32;
