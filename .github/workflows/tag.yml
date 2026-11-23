@@ -1,0 +1,35 @@
+name: Create version tag
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag matching application version
+        required: true
+        default: v0.1.0
+permissions:
+  contents: write
+  actions: write
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Verify successful build for this exact commit and create tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:VERSION_TAG -cne "v$version") { throw 'Tag must match package version' }
+          $runs = gh api "repos/$env:GH_REPO/actions/workflows/build.yml/runs?head_sha=$env:SOURCE_SHA&status=success" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($runs.total_count -lt 1) { throw 'No successful Build Windows x64 for this exact main commit' }
+          $body = @{ref="refs/tags/$env:VERSION_TAG";sha=$env:SOURCE_SHA} | ConvertTo-Json -Compress
+          $body | gh api "repos/$env:GH_REPO/git/refs" --method POST --input -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh workflow run release.yml --ref $env:VERSION_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,0 +1,87 @@
+name: Build Windows x64
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', LICENSE]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Require committed lockfiles
+        shell: pwsh
+        run: |
+          if (!(Test-Path package-lock.json) -or !(Test-Path src-tauri/Cargo.lock)) {
+            throw 'Run Prepare cloud dependencies first. This job never resolves unlocked dependencies.'
+          }
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22.14.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install pinned Rust and components on runner
+        run: rustup show
+      - uses: actions/cache@v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: windows-x64-rust-
+      - name: Verify Tauri Windows prerequisites supplied by windows-latest
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Windows runner lacks MSVC C++ toolchain' }
+          # NSIS is downloaded by the pinned Tauri CLI into this disposable runner.
+          # SQLite builds from the bundled C source using this MSVC toolchain.
+      - run: npm ci --no-audit --no-fund
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Build frontend
+        run: npm run build
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Build Rust backend
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+      - name: Package Windows x64 installer
+        run: npm run tauri -- build --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+      - name: Collect and verify deliverables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $binary = 'src-tauri/target/x86_64-pc-windows-msvc/release/minehost.exe'
+          if (!(Test-Path $binary)) { throw 'Standalone executable was not produced' }
+          Copy-Item $binary artifacts/MineHost-windows-x64.exe
+          $installers = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          Copy-Item $installers[0].FullName artifacts/
+          $sums = Get-ChildItem artifacts/*.exe | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          $sums | Set-Content artifacts/SHA256SUMS.txt -Encoding utf8NoBOM
+          Copy-Item README.md,LICENSE artifacts/
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: MineHost-windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30

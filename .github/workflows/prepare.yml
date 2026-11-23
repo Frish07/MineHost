@@ -1,0 +1,62 @@
+name: Prepare cloud dependencies
+on:
+  push:
+    branches: [main]
+    paths: [package.json, src-tauri/Cargo.toml, rust-toolchain.toml, .github/workflows/prepare.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: prepare-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  lock:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          ref: main
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22.14.0'
+      - name: Install Rust only on GitHub runner
+        shell: pwsh
+        run: |
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Resolve lockfiles and normalize Rust formatting in the cloud
+        shell: pwsh
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: cloud-lockfiles
+          path: |
+            package-lock.json
+            src-tauri/Cargo.lock
+          if-no-files-found: error
+      - name: Commit cloud-generated files
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json src-tauri/Cargo.lock src-tauri/src src-tauri/build.rs
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 1) {
+            git commit -m 'chore: lock cloud dependencies and format Rust'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } elseif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Explicitly start locked build (bot pushes do not trigger workflows)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build.yml --ref main --repo '${{ github.repository }}'

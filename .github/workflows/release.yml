@@ -1,0 +1,63 @@
+name: Release Windows x64
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Require tag and application versions to match
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          if ($env:RELEASE_TAG -cne "v$version" -or $tauriVersion -cne $version -or $cargo -notmatch "(?m)^version = `"$([regex]::Escape($version))`"$") {
+            throw 'Tag, package.json, Cargo.toml and Tauri versions must match'
+          }
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yml
+  publish:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: MineHost-windows-x64
+          path: artifacts
+      - name: Verify SHA-256 before publication
+        shell: pwsh
+        run: |
+          Get-Content artifacts/SHA256SUMS.txt | ForEach-Object {
+            $expected, $file = $_ -split '  ', 2
+            if ($file -notmatch '^[A-Za-z0-9._ -]+\.exe$') { throw 'Unsafe artifact filename' }
+            if ((Get-FileHash "artifacts/$file" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Hash mismatch: $file" }
+          }
+          if (@(Get-ChildItem artifacts/*.exe).Count -lt 2) { throw 'Missing release binaries' }
+      - name: Publish only verified artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to replace published binaries' }
+          gh release create $env:RELEASE_TAG artifacts/*.exe artifacts/SHA256SUMS.txt --verify-tag --generate-notes --title "MineHost $env:RELEASE_TAG" --draft
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --draft=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

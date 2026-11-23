@@ -1,0 +1,27 @@
+[package]
+name = "minehost"
+version = "0.1.0"
+description = "Local Minecraft server manager"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "=2.4.1", features = [] }
+
+[dependencies]
+tauri = { version = "=2.8.5", features = [] }
+tauri-plugin-dialog = "=2.4.0"
+tokio = { version = "=1.47.1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
+uuid = { version = "=1.18.1", features = ["v4"] }
+sha2 = "=0.10.9"
+zip = { version = "=4.6.1", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
