@@ -138,7 +138,10 @@ mod tests {
     fn sqlite_rejects_port_collisions() {
         let state = memory_state();
         let inner = lock(&state).unwrap();
-        let json: String = inner.db.query_row("SELECT data FROM servers", [], |row| row.get(0)).unwrap();
+        let json: String = inner
+            .db
+            .query_row("SELECT data FROM servers", [], |row| row.get(0))
+            .unwrap();
         let mut server: Server = serde_json::from_str(&json).unwrap();
         server.id = uuid::Uuid::new_v4().to_string();
         assert!(save(&inner, &server).is_err());
@@ -149,7 +152,11 @@ mod tests {
     #[test]
     fn operations_release_the_guard_after_failure() {
         let state = memory_state();
-        let id: String = lock(&state).unwrap().db.query_row("SELECT id FROM servers", [], |row| row.get(0)).unwrap();
+        let id: String = lock(&state)
+            .unwrap()
+            .db
+            .query_row("SELECT id FROM servers", [], |row| row.get(0))
+            .unwrap();
         let operation = begin(&state, &id).unwrap();
         assert!(begin(&state, &id).is_err());
         drop(operation);

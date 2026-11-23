@@ -63,7 +63,9 @@ fn minimum_java(metadata: &Value) -> Result<u32> {
     let major = metadata
         .pointer("/version/java/version/minimum")
         .and_then(Value::as_u64)
-        .ok_or("Paper did not specify its minimum Java version; automatic installation is unsafe")?;
+        .ok_or(
+            "Paper did not specify its minimum Java version; automatic installation is unsafe",
+        )?;
     if !(8..=50).contains(&major) {
         return Err("Unsupported Java major in Paper metadata".into());
     }
@@ -350,10 +352,14 @@ mod tests {
 
     #[test]
     fn java_requirement_comes_from_version_metadata() {
-        let metadata = serde_json::json!({"version":{"id":"1.21.11","java":{"version":{"minimum":21}}}});
+        let metadata =
+            serde_json::json!({"version":{"id":"1.21.11","java":{"version":{"minimum":21}}}});
         assert_eq!(minimum_java(&metadata).unwrap(), 21);
         assert!(minimum_java(&serde_json::json!({"downloads":{}})).is_err());
-        assert!(minimum_java(&serde_json::json!({"version":{"java":{"version":{"minimum":999}}}})).is_err());
+        assert!(
+            minimum_java(&serde_json::json!({"version":{"java":{"version":{"minimum":999}}}}))
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -365,7 +371,9 @@ mod tests {
         }
         let versions = paper_versions().await.unwrap();
         assert!(versions.iter().any(|v| v == "1.21.11"));
-        let major = install_paper("1.21.11", &root.join("server")).await.unwrap();
+        let major = install_paper("1.21.11", &root.join("server"))
+            .await
+            .unwrap();
         assert_eq!(major, 21);
         let java = install_java(&root, major).await.unwrap();
         assert_eq!(java.major, major);
