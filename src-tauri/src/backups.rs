@@ -7,9 +7,11 @@ use std::{
 use tauri::State;
 const MANIFEST: &str = ".minehost-backup.json";
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Backup {
     name: String,
     size: u64,
+    modified_at: u64,
 }
 #[derive(Serialize)]
 pub struct Preview {
@@ -117,16 +119,24 @@ pub async fn list_backups(state: State<'_, Shared>, id: String) -> Result<Vec<Ba
                 .to_string_lossy()
                 .into_owned();
             if name.starts_with(&format!("{id}-")) && name.ends_with(".zip") && path.is_file() {
+                let metadata = std::fs::metadata(path).map_err(error)?;
+                let modified_at = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|v| v.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|v| v.as_secs())
+                    .unwrap_or(0);
                 rows.push(Backup {
                     name,
-                    size: std::fs::metadata(path).map_err(error)?.len(),
+                    size: metadata.len(),
+                    modified_at,
                 });
             }
             if rows.len() > 4096 {
                 return Err("Too many backups".into());
             }
         }
-        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        rows.sort_by_key(|v| std::cmp::Reverse(v.modified_at));
         Ok(rows)
     })
     .await
