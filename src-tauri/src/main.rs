@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod addons;
+mod modrinth;
 mod runtime;
 mod safety;
 mod software;
-mod addons;
-mod modrinth;
 
 use runtime::Runtime;
 use serde::{Deserialize, Serialize};
@@ -163,7 +163,9 @@ fn create_server(
     save(&inner, &server)?;
     let dir = directory(&inner, &server.id)?;
     std::fs::create_dir_all(&dir).map_err(error)?;
-    if let Ok(addon_dir) = software.addon_directory() { std::fs::create_dir_all(dir.join(addon_dir)).map_err(error)?; }
+    if let Ok(addon_dir) = software.addon_directory() {
+        std::fs::create_dir_all(dir.join(addon_dir)).map_err(error)?;
+    }
     std::fs::write(dir.join("server.properties"), format!("server-port={}\nonline-mode=true\nmax-players=20\ndifficulty=normal\npvp=true\nview-distance=10\nsimulation-distance=8\nmotd=MineHost Server\n", port)).map_err(error)?;
     Ok(server.id)
 }
@@ -187,7 +189,9 @@ async fn install_software(
     let report = |progress| {
         let _ = on_progress.send(progress);
     };
-    let major = server.software.install(&server.version, &dir, &report)
+    let major = server
+        .software
+        .install(&server.version, &dir, &report)
         .await
         .map_err(|e| format!("{:?} {}: {e}", server.software, server.version))?;
     let size = std::fs::metadata(dir.join(server.software.launcher()))
@@ -323,7 +327,9 @@ fn start_server(
         )
     };
     if !server.eula || !server.installed {
-        return Err("Install server software and explicitly accept the EULA before starting".into());
+        return Err(
+            "Install server software and explicitly accept the EULA before starting".into(),
+        );
     }
     let java = runtime::detect_java(&root, server.java_major, &custom_path)?;
     let mut inner = lock(&state)?;
@@ -436,23 +442,21 @@ fn save_properties(state: State<'_, Shared>, id: String, content: String) -> Res
 }
 
 #[tauri::command]
-fn import_addon(
-    state: State<'_, Shared>,
-    id: String,
-    source: String,
-    consent: bool,
-) -> Result<()> {
+fn import_addon(state: State<'_, Shared>, id: String, source: String, consent: bool) -> Result<()> {
     if !consent {
         return Err("Confirm third-party plugin execution risk".into());
     }
     let _operation = begin(&state, &id)?;
     let (server, dir) = profile_path(&state, &id)?;
-    if !server.installed { return Err("Install the selected server software before importing addons".into()); }
+    if !server.installed {
+        return Err("Install the selected server software before importing addons".into());
+    }
     addons::import(&dir, server.software, &server.version, Path::new(&source))
 }
 
 fn profile_path(shared: &Shared, id: &str) -> Result<(Server, PathBuf)> {
-    let inner = lock(shared)?; Ok((load(&inner, id)?, directory(&inner, id)?))
+    let inner = lock(shared)?;
+    Ok((load(&inner, id)?, directory(&inner, id)?))
 }
 
 #[tauri::command]
@@ -462,58 +466,128 @@ fn list_addons(state: State<'_, Shared>, id: String) -> Result<Vec<addons::Insta
 }
 
 #[tauri::command]
-fn set_addon_enabled(state: State<'_, Shared>, id: String, file_name: String, enabled: bool) -> Result<()> {
+fn set_addon_enabled(
+    state: State<'_, Shared>,
+    id: String,
+    file_name: String,
+    enabled: bool,
+) -> Result<()> {
     let _operation = begin(&state, &id)?;
     let (server, dir) = profile_path(&state, &id)?;
     addons::set_enabled(&dir, server.software, &file_name, enabled)
 }
 
 #[tauri::command]
-fn remove_addon(state: State<'_, Shared>, id: String, file_name: String, confirmation: String) -> Result<()> {
-    if confirmation != file_name { return Err("Confirm the addon filename before removal".into()); }
+fn remove_addon(
+    state: State<'_, Shared>,
+    id: String,
+    file_name: String,
+    confirmation: String,
+) -> Result<()> {
+    if confirmation != file_name {
+        return Err("Confirm the addon filename before removal".into());
+    }
     let _operation = begin(&state, &id)?;
     let (server, dir) = profile_path(&state, &id)?;
     addons::remove(&dir, server.software, &file_name)
 }
 
 #[tauri::command]
-async fn search_addons(state: State<'_, Shared>, id: String, query: String, offset: u32, sort: String) -> Result<modrinth::SearchResult> {
+async fn search_addons(
+    state: State<'_, Shared>,
+    id: String,
+    query: String,
+    offset: u32,
+    sort: String,
+) -> Result<modrinth::SearchResult> {
     let (server, _) = profile_path(&state, &id)?;
     modrinth::search(server.software, &server.version, &query, offset, &sort).await
 }
 
 #[tauri::command]
-async fn addon_versions(state: State<'_, Shared>, id: String, project_id: String) -> Result<Vec<modrinth::Version>> {
+async fn addon_versions(
+    state: State<'_, Shared>,
+    id: String,
+    project_id: String,
+) -> Result<Vec<modrinth::Version>> {
     let (server, _) = profile_path(&state, &id)?;
     modrinth::versions(&project_id, server.software, &server.version).await
 }
 
 fn active_projects(dir: &Path, software: software::Software) -> Result<Vec<(String, String)>> {
-    Ok(addons::installed(dir, software)?.into_iter().filter(|v| v.enabled).filter_map(|v| Some((v.project_id?, v.version_id?))).collect())
+    Ok(addons::installed(dir, software)?
+        .into_iter()
+        .filter(|v| v.enabled)
+        .filter_map(|v| Some((v.project_id?, v.version_id?)))
+        .collect())
 }
 
 #[tauri::command]
-async fn plan_addon(state: State<'_, Shared>, id: String, version_id: String) -> Result<Vec<modrinth::PlanItem>> {
+async fn plan_addon(
+    state: State<'_, Shared>,
+    id: String,
+    version_id: String,
+) -> Result<Vec<modrinth::PlanItem>> {
     let (server, dir) = profile_path(&state, &id)?;
-    modrinth::plan(&version_id, server.software, &server.version, &active_projects(&dir, server.software)?).await
+    modrinth::plan(
+        &version_id,
+        server.software,
+        &server.version,
+        &active_projects(&dir, server.software)?,
+    )
+    .await
 }
 
 #[tauri::command]
-async fn install_addon(state: State<'_, Shared>, id: String, version_id: String, approved_versions: Vec<String>, consent: bool, on_progress: tauri::ipc::Channel<runtime::DownloadProgress>) -> Result<()> {
-    if !consent { return Err("Confirm third-party code execution risk before installing addons".into()); }
+async fn install_addon(
+    state: State<'_, Shared>,
+    id: String,
+    version_id: String,
+    approved_versions: Vec<String>,
+    consent: bool,
+    on_progress: tauri::ipc::Channel<runtime::DownloadProgress>,
+) -> Result<()> {
+    if !consent {
+        return Err("Confirm third-party code execution risk before installing addons".into());
+    }
     let _operation = begin(&state, &id)?;
     let (server, dir) = profile_path(&state, &id)?;
-    let report = |event| { let _ = on_progress.send(event); };
-    if !server.installed { return Err("Install the selected server software before installing addons".into()); }
-    report(runtime::DownloadProgress::new(runtime::DownloadPhase::Resolving, 0, None));
-    let items = modrinth::plan(&version_id, server.software, &server.version, &active_projects(&dir, server.software)?).await?;
-    addons::install(&dir, server.software, &server.version, &items, &approved_versions, &report).await
+    let report = |event| {
+        let _ = on_progress.send(event);
+    };
+    if !server.installed {
+        return Err("Install the selected server software before installing addons".into());
+    }
+    report(runtime::DownloadProgress::new(
+        runtime::DownloadPhase::Resolving,
+        0,
+        None,
+    ));
+    let items = modrinth::plan(
+        &version_id,
+        server.software,
+        &server.version,
+        &active_projects(&dir, server.software)?,
+    )
+    .await?;
+    addons::install(
+        &dir,
+        server.software,
+        &server.version,
+        &items,
+        &approved_versions,
+        &report,
+    )
+    .await
 }
 
 #[tauri::command]
 fn open_addon_project(project_id: String) -> Result<()> {
     modrinth::identifier(&project_id)?;
-    Command::new("explorer.exe").arg(format!("https://modrinth.com/project/{project_id}")).spawn().map_err(error)?;
+    Command::new("explorer.exe")
+        .arg(format!("https://modrinth.com/project/{project_id}"))
+        .spawn()
+        .map_err(error)?;
     Ok(())
 }
 
@@ -693,8 +767,12 @@ mod tests {
 
     #[test]
     fn legacy_profile_json_without_software_still_loads_as_paper() {
-        let state = memory_state(); let inner = lock(&state).unwrap();
-        let json: String = inner.db.query_row("SELECT data FROM servers", [], |row| row.get(0)).unwrap();
+        let state = memory_state();
+        let inner = lock(&state).unwrap();
+        let json: String = inner
+            .db
+            .query_row("SELECT data FROM servers", [], |row| row.get(0))
+            .unwrap();
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
         value.as_object_mut().unwrap().remove("software");
         let profile: Server = serde_json::from_value(value).unwrap();
