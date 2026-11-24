@@ -481,8 +481,15 @@ mod tests {
         trash(&root, "world", "world").unwrap();
         assert!(!root.join("world").exists());
         let retained = std::fs::read_dir(root.join(".minehost/world-trash"))
-            .unwrap().next().unwrap().unwrap().path();
-        assert_eq!(std::fs::read(retained.join("level.dat")).unwrap(), b"original");
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(
+            std::fs::read(retained.join("level.dat")).unwrap(),
+            b"original"
+        );
     }
     #[test]
     fn rejects_unsafe_archives_without_leaving_a_world() {
