@@ -2,6 +2,9 @@
 
 mod runtime;
 mod safety;
+mod software;
+mod addons;
+mod modrinth;
 
 use runtime::Runtime;
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,8 @@ struct Server {
     eula: bool,
     installed: bool,
     java_major: u32,
+    #[serde(default)]
+    software: software::Software,
 }
 
 #[derive(Serialize)]
@@ -134,6 +139,7 @@ fn create_server(
     version: String,
     port: u16,
     ram_mb: u32,
+    software: software::Software,
 ) -> Result<String> {
     if name.trim().is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err("Name must contain 1–80 printable characters".into());
@@ -152,21 +158,23 @@ fn create_server(
         eula: false,
         installed: false,
         java_major: 21,
+        software,
     };
     save(&inner, &server)?;
     let dir = directory(&inner, &server.id)?;
-    std::fs::create_dir_all(dir.join("plugins")).map_err(error)?;
+    std::fs::create_dir_all(&dir).map_err(error)?;
+    if let Ok(addon_dir) = software.addon_directory() { std::fs::create_dir_all(dir.join(addon_dir)).map_err(error)?; }
     std::fs::write(dir.join("server.properties"), format!("server-port={}\nonline-mode=true\nmax-players=20\ndifficulty=normal\npvp=true\nview-distance=10\nsimulation-distance=8\nmotd=MineHost Server\n", port)).map_err(error)?;
     Ok(server.id)
 }
 
 #[tauri::command]
-async fn paper_versions() -> Result<Vec<String>> {
-    runtime::paper_versions().await
+async fn software_versions(software: software::Software) -> Result<Vec<String>> {
+    software.versions().await
 }
 
 #[tauri::command]
-async fn install_paper(
+async fn install_software(
     state: State<'_, Shared>,
     id: String,
     on_progress: tauri::ipc::Channel<runtime::DownloadProgress>,
@@ -179,10 +187,10 @@ async fn install_paper(
     let report = |progress| {
         let _ = on_progress.send(progress);
     };
-    let major = runtime::install_paper(&server.version, &dir, &report)
+    let major = server.software.install(&server.version, &dir, &report)
         .await
-        .map_err(|e| format!("Paper {}: {e}", server.version))?;
-    let size = std::fs::metadata(dir.join("server.jar"))
+        .map_err(|e| format!("{:?} {}: {e}", server.software, server.version))?;
+    let size = std::fs::metadata(dir.join(server.software.launcher()))
         .map_err(error)?
         .len();
     finish_paper_install(operation, major)?;
@@ -315,7 +323,7 @@ fn start_server(
         )
     };
     if !server.eula || !server.installed {
-        return Err("Install Paper and explicitly accept the EULA before starting".into());
+        return Err("Install server software and explicitly accept the EULA before starting".into());
     }
     let java = runtime::detect_java(&root, server.java_major, &custom_path)?;
     let mut inner = lock(&state)?;
@@ -333,7 +341,7 @@ fn start_server(
             "-Xms256M",
             &format!("-Xmx{}M", server.ram_mb),
             "-jar",
-            "server.jar",
+            server.software.launcher(),
             "nogui",
         ])
         .current_dir(&dir)
@@ -428,7 +436,7 @@ fn save_properties(state: State<'_, Shared>, id: String, content: String) -> Res
 }
 
 #[tauri::command]
-fn import_plugin(
+fn import_addon(
     state: State<'_, Shared>,
     id: String,
     source: String,
@@ -438,28 +446,75 @@ fn import_plugin(
         return Err("Confirm third-party plugin execution risk".into());
     }
     let _operation = begin(&state, &id)?;
-    let source = Path::new(&source);
-    if source.extension().and_then(|s| s.to_str()) != Some("jar") {
-        return Err("Choose a .jar file".into());
-    }
-    if std::fs::metadata(source).map_err(error)?.len() > 256 * 1024 * 1024 {
-        return Err("Plugin exceeds 256 MiB".into());
-    }
-    let mut jar =
-        zip::ZipArchive::new(std::fs::File::open(source).map_err(error)?).map_err(error)?;
-    if jar.by_name("plugin.yml").is_err() && jar.by_name("paper-plugin.yml").is_err() {
-        return Err("Not a recognized Paper/Bukkit plugin (plugin.yml missing)".into());
-    }
-    let inner = lock(&state)?;
-    let target = directory(&inner, &id)?
-        .join("plugins")
-        .join(source.file_name().ok_or("Missing filename")?);
-    safety::reject_links(&target)?;
-    if target.exists() {
-        std::fs::copy(&target, target.with_extension("jar.bak")).map_err(error)?;
-    }
-    let bytes = std::fs::read(source).map_err(error)?;
-    safety::atomic_write(&target, &bytes)
+    let (server, dir) = profile_path(&state, &id)?;
+    if !server.installed { return Err("Install the selected server software before importing addons".into()); }
+    addons::import(&dir, server.software, &server.version, Path::new(&source))
+}
+
+fn profile_path(shared: &Shared, id: &str) -> Result<(Server, PathBuf)> {
+    let inner = lock(shared)?; Ok((load(&inner, id)?, directory(&inner, id)?))
+}
+
+#[tauri::command]
+fn list_addons(state: State<'_, Shared>, id: String) -> Result<Vec<addons::Installed>> {
+    let (server, dir) = profile_path(&state, &id)?;
+    addons::installed(&dir, server.software)
+}
+
+#[tauri::command]
+fn set_addon_enabled(state: State<'_, Shared>, id: String, file_name: String, enabled: bool) -> Result<()> {
+    let _operation = begin(&state, &id)?;
+    let (server, dir) = profile_path(&state, &id)?;
+    addons::set_enabled(&dir, server.software, &file_name, enabled)
+}
+
+#[tauri::command]
+fn remove_addon(state: State<'_, Shared>, id: String, file_name: String, confirmation: String) -> Result<()> {
+    if confirmation != file_name { return Err("Confirm the addon filename before removal".into()); }
+    let _operation = begin(&state, &id)?;
+    let (server, dir) = profile_path(&state, &id)?;
+    addons::remove(&dir, server.software, &file_name)
+}
+
+#[tauri::command]
+async fn search_addons(state: State<'_, Shared>, id: String, query: String, offset: u32, sort: String) -> Result<modrinth::SearchResult> {
+    let (server, _) = profile_path(&state, &id)?;
+    modrinth::search(server.software, &server.version, &query, offset, &sort).await
+}
+
+#[tauri::command]
+async fn addon_versions(state: State<'_, Shared>, id: String, project_id: String) -> Result<Vec<modrinth::Version>> {
+    let (server, _) = profile_path(&state, &id)?;
+    modrinth::versions(&project_id, server.software, &server.version).await
+}
+
+fn active_projects(dir: &Path, software: software::Software) -> Result<Vec<(String, String)>> {
+    Ok(addons::installed(dir, software)?.into_iter().filter(|v| v.enabled).filter_map(|v| Some((v.project_id?, v.version_id?))).collect())
+}
+
+#[tauri::command]
+async fn plan_addon(state: State<'_, Shared>, id: String, version_id: String) -> Result<Vec<modrinth::PlanItem>> {
+    let (server, dir) = profile_path(&state, &id)?;
+    modrinth::plan(&version_id, server.software, &server.version, &active_projects(&dir, server.software)?).await
+}
+
+#[tauri::command]
+async fn install_addon(state: State<'_, Shared>, id: String, version_id: String, approved_versions: Vec<String>, consent: bool, on_progress: tauri::ipc::Channel<runtime::DownloadProgress>) -> Result<()> {
+    if !consent { return Err("Confirm third-party code execution risk before installing addons".into()); }
+    let _operation = begin(&state, &id)?;
+    let (server, dir) = profile_path(&state, &id)?;
+    let report = |event| { let _ = on_progress.send(event); };
+    if !server.installed { return Err("Install the selected server software before installing addons".into()); }
+    report(runtime::DownloadProgress::new(runtime::DownloadPhase::Resolving, 0, None));
+    let items = modrinth::plan(&version_id, server.software, &server.version, &active_projects(&dir, server.software)?).await?;
+    addons::install(&dir, server.software, &server.version, &items, &approved_versions, &report).await
+}
+
+#[tauri::command]
+fn open_addon_project(project_id: String) -> Result<()> {
+    modrinth::identifier(&project_id)?;
+    Command::new("explorer.exe").arg(format!("https://modrinth.com/project/{project_id}")).spawn().map_err(error)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -574,7 +629,7 @@ fn main() {
         db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);")?;
         app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new() })));
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, paper_versions, install_paper, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_plugin, open_folder, delete_server, backup_server])
+    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -608,6 +663,7 @@ mod tests {
             eula: false,
             installed: false,
             java_major: 21,
+            software: software::Software::Paper,
         };
         let inner = Inner {
             db,
@@ -633,6 +689,16 @@ mod tests {
         assert!(save(&inner, &server).is_err());
         server.port += 1;
         assert!(save(&inner, &server).is_ok());
+    }
+
+    #[test]
+    fn legacy_profile_json_without_software_still_loads_as_paper() {
+        let state = memory_state(); let inner = lock(&state).unwrap();
+        let json: String = inner.db.query_row("SELECT data FROM servers", [], |row| row.get(0)).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("software");
+        let profile: Server = serde_json::from_value(value).unwrap();
+        assert_eq!(profile.software, software::Software::Paper);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::{error, safety, Result};
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use sha2::{digest::DynDigest, Digest, Sha256, Sha512};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-const USER_AGENT: &str = "MineHost/0.1.1 (https://github.com/Frish07/MineHost)";
+const USER_AGENT: &str = "MineHost/0.2.0 (https://github.com/Frish07/MineHost)";
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +39,7 @@ impl DownloadProgress {
     }
 }
 
-fn client() -> Result<reqwest::Client> {
+pub(crate) fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .https_only(true)
@@ -100,20 +100,20 @@ fn minimum_java(metadata: &Value) -> Result<u32> {
     Ok(major as u32)
 }
 
-async fn download(
+pub(crate) async fn download(
     url: &str,
     checksum: &str,
     destination: &Path,
     progress: &(dyn Fn(DownloadProgress) + Send + Sync),
 ) -> Result<()> {
-    if checksum.len() != 64 || !checksum.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("Invalid SHA-256 from provider".into());
-    }
     let parsed = reqwest::Url::parse(url).map_err(error)?;
     let host = parsed.host_str().unwrap_or_default();
-    if parsed.scheme() != "https" || !(host == "fill-data.papermc.io" || host == "github.com") {
+    if parsed.scheme() != "https" || !matches!(host, "fill-data.papermc.io" | "github.com" | "piston-data.mojang.com" | "api.purpurmc.org" | "meta.fabricmc.net" | "cdn.modrinth.com") {
         return Err(format!("Unexpected download origin: {host}"));
     }
+    let is_fabric_launcher = host == "meta.fabricmc.net" && parsed.path().ends_with("/server/jar");
+    if checksum.is_empty() && !is_fabric_launcher { return Err("The download provider must supply a checksum".into()); }
+    let mut digest = if checksum.is_empty() { None } else { Some(hasher(checksum)?) };
     safety::reject_links(destination)?;
     let temporary = destination.with_extension(format!("{}.download", uuid::Uuid::new_v4()));
     let result = async {
@@ -131,7 +131,6 @@ async fn download(
             .write(true)
             .open(&temporary)
             .map_err(error)?;
-        let mut digest = Sha256::new();
         let mut size: u64 = 0;
         let mut last_update = std::time::Instant::now();
         while let Some(chunk) = response.chunk().await.map_err(error)? {
@@ -139,7 +138,7 @@ async fn download(
             if size > 512 * 1024 * 1024 {
                 return Err("Download exceeds 512 MiB".into());
             }
-            digest.update(&chunk);
+            if let Some(digest) = digest.as_mut() { digest.update(&chunk); }
             file.write_all(&chunk).map_err(error)?;
             if last_update.elapsed() >= Duration::from_millis(100) {
                 progress(DownloadProgress::new(
@@ -151,11 +150,15 @@ async fn download(
             }
         }
         progress(DownloadProgress::new(DownloadPhase::Verifying, size, total));
-        if size == 0 || format!("{:x}", digest.finalize()) != checksum.to_ascii_lowercase() {
-            return Err("Download SHA-256 mismatch".into());
-        }
+        if size == 0 { return Err("Empty download".into()); }
+        if let Some(digest) = digest.take() { if hex(&digest.finalize()) != checksum.to_ascii_lowercase() { return Err("Download checksum mismatch".into()); } }
         file.sync_all().map_err(error)?;
         drop(file);
+        if checksum.is_empty() {
+            let mut jar = zip::ZipArchive::new(std::fs::File::open(&temporary).map_err(error)?).map_err(error)?;
+            jar.by_name("META-INF/MANIFEST.MF").map_err(error)?;
+            jar.by_name("install.properties").map_err(error)?;
+        }
         progress(DownloadProgress::new(
             DownloadPhase::Installing,
             size,
@@ -168,6 +171,50 @@ async fn download(
         let _ = std::fs::remove_file(temporary);
     }
     result
+}
+
+fn hasher(checksum: &str) -> Result<Box<dyn DynDigest + Send>> {
+    if !checksum.bytes().all(|b| b.is_ascii_hexdigit()) { return Err("Invalid checksum".into()); }
+    match checksum.len() {
+        32 => Ok(Box::new(md5::Md5::new())),
+        40 => Ok(Box::new(sha1::Sha1::new())),
+        64 => Ok(Box::new(Sha256::new())),
+        128 => Ok(Box::new(Sha512::new())),
+        _ => Err("Unsupported checksum algorithm".into()),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+
+type JsonCache = std::collections::HashMap<String, (std::time::Instant, Value, usize)>;
+static JSON_CACHE: std::sync::OnceLock<std::sync::Mutex<JsonCache>> = std::sync::OnceLock::new();
+
+pub(crate) async fn get_json(url: &str) -> Result<Value> { get_verified_json(url, None).await }
+
+pub(crate) async fn get_verified_json(url: &str, checksum: Option<&str>) -> Result<Value> {
+    let parsed = reqwest::Url::parse(url).map_err(error)?;
+    if parsed.scheme() != "https" || !matches!(parsed.host_str(), Some("piston-meta.mojang.com" | "api.purpurmc.org" | "meta.fabricmc.net" | "api.modrinth.com")) { return Err("Unexpected metadata origin".into()); }
+    let key = format!("{url}|{}", checksum.unwrap_or_default());
+    let cache = JSON_CACHE.get_or_init(|| std::sync::Mutex::new(JsonCache::new()));
+    {
+        let guard = cache.lock().map_err(error)?;
+        if let Some((at, value, _)) = guard.get(&key) { if at.elapsed() < Duration::from_secs(120) { return Ok(value.clone()); } }
+    }
+    let mut response = client()?.get(parsed).send().await.map_err(error)?.error_for_status().map_err(error)?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(error)? {
+        if bytes.len() + chunk.len() > 4 * 1024 * 1024 { return Err("API response exceeds 4 MiB".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    if let Some(checksum) = checksum {
+        let mut digest = hasher(checksum)?; digest.update(&bytes);
+        if hex(&digest.finalize()) != checksum.to_ascii_lowercase() { return Err("Metadata checksum mismatch".into()); }
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(error)?;
+    let mut guard = cache.lock().map_err(error)?;
+    if guard.len() >= 128 || guard.values().map(|entry| entry.2).sum::<usize>() + bytes.len() > 16 * 1024 * 1024 { guard.clear(); }
+    guard.insert(key, (std::time::Instant::now(), value.clone(), bytes.len()));
+    Ok(value)
 }
 
 pub async fn install_paper(

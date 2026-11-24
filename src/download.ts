@@ -8,8 +8,8 @@ export type DownloadProgress = {
 };
 
 export const downloadLabels = {
-  ru: { resolving: 'Получение данных Paper…', downloading: 'Скачивание Paper…', verifying: 'Проверка SHA-256…', installing: 'Сохранение файлов…', complete: 'Paper установлен', failed: 'Не удалось установить Paper', title: 'Загрузка Paper' },
-  en: { resolving: 'Getting Paper metadata…', downloading: 'Downloading Paper…', verifying: 'Verifying SHA-256…', installing: 'Saving files…', complete: 'Paper installed', failed: 'Paper installation failed', title: 'Paper download' },
+  ru: { resolving: 'Получение данных…', downloading: 'Скачивание…', verifying: 'Проверка файла…', installing: 'Сохранение файлов…', complete: 'Установлено', failed: 'Не удалось установить', title: 'Загрузка' },
+  en: { resolving: 'Getting metadata…', downloading: 'Downloading…', verifying: 'Verifying file…', installing: 'Saving files…', complete: 'Installed', failed: 'Installation failed', title: 'Download' },
 };
 
 export function downloadPercentage(progress: DownloadProgress): number | undefined {

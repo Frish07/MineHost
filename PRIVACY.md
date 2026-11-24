@@ -5,6 +5,8 @@ MineHost stores server profiles, worlds, logs, settings, backups and managed Jav
 Network access initiated by MineHost follows explicit user actions:
 
 - Loading Minecraft versions and installing Paper contact the official PaperMC download service. The service receives the requested version/download URL, IP address and the MineHost User-Agent.
+- Selecting Vanilla, Purpur or Fabric contacts Mojang's official manifests/downloads, the Purpur API, or Fabric Meta respectively. Installing Fabric also allows its launcher, after the user starts Java, to fetch official libraries and Minecraft files.
+- Searching Modrinth sends the entered search text, loader/Minecraft filters, sort order and page offset to its public API. Opening versions and installing addons sends project/version requests and downloads JARs from the official Modrinth CDN. The service receives network metadata and the MineHost User-Agent. Installed files and server logs are not uploaded to Modrinth. See [Modrinth privacy](https://modrinth.com/legal/privacy).
 - Downloading Java, after consent, contacts the Adoptium API and its GitHub-hosted Temurin releases. These providers receive the request and network metadata. Merely detecting an installed Java runtime is local.
 - Starting a Minecraft server launches a separate Java process. Minecraft/Paper may contact their authentication or dependency services; third-party plugins may make their own requests. MineHost does not sandbox plugin network access. The user chooses whether to run these programs.
 
