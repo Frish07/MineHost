@@ -173,12 +173,14 @@ pub fn powershell(
     let mut command =
         Command::new(Path::new(&system).join("System32/WindowsPowerShell/v1.0/powershell.exe"));
     runtime::hide_window(&mut command);
+    let argument=if elevated {code}else{encoded(&code)};
+    if argument.encode_utf16().count()>28000 {return Err("Network command exceeds the Windows command-line limit".into());}
     command
         .args([
             "-NoProfile",
             "-NonInteractive",
-            "-EncodedCommand",
-            &encoded(&code),
+            if elevated {"-Command"}else{"-EncodedCommand"},
+            &argument,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::from(std::fs::File::create(&out).map_err(error)?))

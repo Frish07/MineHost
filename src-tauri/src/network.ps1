@@ -26,9 +26,12 @@ switch ($r.action) {
     $rule = Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop | Where-Object Name -eq $name | Select-Object -First 1
     if ($rule -and $rule.Group -ne 'MineHost') { throw 'A different application owns this rule name' }
     if ($r.action -eq 'firewall_get') {
-      $value = @{present=[bool]$rule;name=$name;port='';profile='';remote='';enabled=$false}
+      $value = @{present=[bool]$rule;name=$name;port='';profile='';remote='';protocol='';direction='';action='';enabled=$false}
       if ($rule) {
         $value.port = (($rule | Get-NetFirewallPortFilter).LocalPort -join ',')
+        $value.protocol = [string]($rule | Get-NetFirewallPortFilter).Protocol
+        $value.direction = [string]$rule.Direction
+        $value.action = [string]$rule.Action
         $value.profile = [string]$rule.Profile
         $value.remote = (($rule | Get-NetFirewallAddressFilter).RemoteAddress -join ',')
         $value.enabled = ([string]$rule.Enabled -eq 'True')

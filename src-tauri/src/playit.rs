@@ -175,7 +175,7 @@ pub async fn playit_claim(state: State<'_, Shared>, consent: bool) -> Result<Str
         );
     }
     let code = uuid::Uuid::new_v4().simple().to_string()[..10].to_string();
-    api("/claim/setup",&json!({"code":code,"agent_type":"self-managed","version":"MineHost 0.5.0 (playit agent 2.0.2)"})).await?;
+    api("/claim/setup",&json!({"code":code,"agent_type":"assignable","version":"MineHost 0.5.0"})).await?;
     lock(&state)?.claim = Some(Claim {
         code: code.clone(),
         created: Instant::now(),
@@ -193,7 +193,7 @@ pub async fn playit_finish_claim(state: State<'_, Shared>) -> Result<String> {
         }
         claim.code.clone()
     };
-    let setup=api("/claim/setup",&json!({"code":code,"agent_type":"self-managed","version":"MineHost 0.5.0 (playit agent 2.0.2)"})).await?;
+    let setup=api("/claim/setup",&json!({"code":code,"agent_type":"assignable","version":"MineHost 0.5.0"})).await?;
     let phase = setup.as_str().ok_or("Unknown claim response")?;
     match phase {
         "UserAccepted" => {
@@ -344,7 +344,7 @@ pub async fn playit_start(state: State<'_, Shared>, consent: bool) -> Result<()>
     let result = loop {
         match ipc(&pipe, pid, json!({"type":"set_secret","secret":secret})).await {
             Ok(response) => {
-                break if response["type"] == "set_secret" {
+                break if response["type"] == "set_secret" && response.pointer("/data/accepted").and_then(Value::as_bool)==Some(true) {
                     Ok(())
                 } else {
                     Err("Agent did not accept credential provisioning".into())
@@ -426,6 +426,8 @@ pub struct Status {
     linked: bool,
     running: bool,
     phase: String,
+    notice_count: usize,
+    pending_tunnels: usize,
     pub(crate) tunnels: Vec<Tunnel>,
 }
 fn tunnels(value: &Value, port: Option<u16>) -> Vec<Tunnel> {
@@ -487,6 +489,8 @@ pub async fn playit_status(state: State<'_, Shared>, id: Option<String>) -> Resu
         linked: win::credential_read(CREDENTIAL)?.is_some(),
         running: endpoint.is_some(),
         phase: "stopped".into(),
+        notice_count: 0,
+        pending_tunnels: 0,
         tunnels: vec![],
     };
     if let Some((pipe, pid)) = endpoint {
@@ -495,6 +499,8 @@ pub async fn playit_status(state: State<'_, Shared>, id: Option<String>) -> Resu
                 let lifecycle = &reply["data"];
                 status.phase = lifecycle["state"].as_str().unwrap_or("unknown").to_string();
                 if status.phase == "running" {
+                    status.notice_count=lifecycle.pointer("/data/notices").and_then(Value::as_array).map_or(0,Vec::len);
+                    status.pending_tunnels=lifecycle.pointer("/data/pending_tunnels").and_then(Value::as_array).map_or(0,Vec::len);
                     status.tunnels = tunnels(lifecycle, port);
                 }
             }
@@ -507,7 +513,7 @@ pub async fn playit_status(state: State<'_, Shared>, id: Option<String>) -> Resu
 pub fn network_open_link(kind: String, claim_url: Option<String>) -> Result<()> {
     let url = match kind.as_str() {
         "playit-dashboard" => "https://playit.gg/account/tunnels".into(),
-        "playit-domains" => "https://playit.gg/support/add-an-external-domain-to-playit-gg/".into(),
+        "playit-domains" => "https://playit.gg/support/add-external-domain/".into(),
         "playit-claim" => {
             let value = claim_url.ok_or("Missing claim URL")?;
             let parsed = reqwest::Url::parse(&value).map_err(error)?;
