@@ -2,12 +2,12 @@
 
 mod addons;
 mod archive;
-mod backups;
 mod backup_schedule;
-mod drive;
-mod drive_auth;
+mod backups;
 mod catalog;
 mod dimensions;
+mod drive;
+mod drive_auth;
 mod files;
 mod forge;
 mod history;
@@ -756,7 +756,9 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     transaction
         .execute("DELETE FROM network_settings WHERE server_id=?1", [&id])
         .map_err(error)?;
-    transaction.execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id]).map_err(error)?;
+    transaction
+        .execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id])
+        .map_err(error)?;
     transaction.commit().map_err(error)?;
     Ok(())
 }
