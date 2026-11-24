@@ -230,7 +230,9 @@ async fn install_software(
         (load(&inner, &id)?, directory(&inner, &id)?)
     };
     let report = |mut progress: runtime::DownloadProgress| {
-        if progress.phase==runtime::DownloadPhase::Complete {progress.phase=runtime::DownloadPhase::Installing;}
+        if progress.phase == runtime::DownloadPhase::Complete {
+            progress.phase = runtime::DownloadPhase::Installing;
+        }
         let _ = on_progress.send(progress);
     };
     let (major, size) = if matches!(
@@ -728,9 +730,13 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     std::fs::create_dir_all(&trash).map_err(error)?;
     safety::reject_links(&trash)?;
     std::fs::rename(dir, trash.join(format!("{}-{}", id, uuid::Uuid::new_v4()))).map_err(error)?;
-    let transaction=inner.db.unchecked_transaction().map_err(error)?;
-    transaction.execute("DELETE FROM connection_history WHERE server_id=?1",[&id]).map_err(error)?;
-    transaction.execute("DELETE FROM servers WHERE id=?1",[&id]).map_err(error)?;
+    let transaction = inner.db.unchecked_transaction().map_err(error)?;
+    transaction
+        .execute("DELETE FROM connection_history WHERE server_id=?1", [&id])
+        .map_err(error)?;
+    transaction
+        .execute("DELETE FROM servers WHERE id=?1", [&id])
+        .map_err(error)?;
     transaction.commit().map_err(error)?;
     Ok(())
 }

@@ -166,7 +166,11 @@ fn run_installer(java: &Path, installer: &Path, stage: &Path) -> Result<()> {
                 .read_to_string(&mut log)
                 .map_err(error)?;
             let mut stdout = String::new();
-            std::fs::File::open(&out).map_err(error)?.take(16384).read_to_string(&mut stdout).map_err(error)?;
+            std::fs::File::open(&out)
+                .map_err(error)?
+                .take(16384)
+                .read_to_string(&mut stdout)
+                .map_err(error)?;
             log.push_str(&stdout);
             return Err(format!("Official installer failed ({status}): {log}"));
         }
@@ -242,7 +246,11 @@ pub async fn install(
         return Err("Official installer targets a different Minecraft version".into());
     }
     drop(zip);
-    report(DownloadProgress::new(DownloadPhase::Installing, installer_size, None));
+    report(DownloadProgress::new(
+        DownloadPhase::Installing,
+        installer_size,
+        None,
+    ));
     let work = stage.0.join("server");
     std::fs::create_dir(&work).map_err(error)?;
     let java = java.to_path_buf();
@@ -325,13 +333,37 @@ mod tests {
                 .await
                 .unwrap();
             assert!(launch_arguments(&root, software, game).unwrap()[0].starts_with("@libraries/"));
-            let log=root.join("bootstrap-help.log");
-            let output=std::fs::File::create(&log).unwrap();
-            let mut command=Command::new(&java.path);
+            let log = root.join("bootstrap-help.log");
+            let output = std::fs::File::create(&log).unwrap();
+            let mut command = Command::new(&java.path);
             runtime::hide_window(&mut command);
-            let mut child=command.arg("-Xmx512M").arg(&launch_arguments(&root,software,game).unwrap()[0]).arg("--help").current_dir(&root).stdin(Stdio::null()).stdout(Stdio::from(output.try_clone().unwrap())).stderr(Stdio::from(output)).spawn().unwrap();
-            let deadline=Instant::now()+Duration::from_secs(90);
-            loop{if let Some(status)=child.try_wait().unwrap(){assert!(status.success(),"{software:?} bootstrap: {}",std::fs::read_to_string(&log).unwrap_or_default());break;}if Instant::now()>deadline{let _=child.kill();let _=child.wait();panic!("Loader bootstrap --help timed out");}std::thread::sleep(Duration::from_millis(100));}
+            let mut child = command
+                .arg("-Xmx512M")
+                .arg(&launch_arguments(&root, software, game).unwrap()[0])
+                .arg("--help")
+                .current_dir(&root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(output.try_clone().unwrap()))
+                .stderr(Stdio::from(output))
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(90);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(
+                        status.success(),
+                        "{software:?} bootstrap: {}",
+                        std::fs::read_to_string(&log).unwrap_or_default()
+                    );
+                    break;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("Loader bootstrap --help timed out");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             assert!(!root.join("eula.txt").exists());
         }
     }

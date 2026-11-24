@@ -209,7 +209,10 @@ mod tests {
             .is_empty());
         assert!(online_line("There are 2 of a max of 20 players online: Steve").is_none());
         assert!(online_line("Players: unknown").is_none());
-        assert!(online_line("[Server thread/INFO]: <Alex> There are 0 of a max of 20 players online:").is_none());
+        assert!(online_line(
+            "[Server thread/INFO]: <Alex> There are 0 of a max of 20 players online:"
+        )
+        .is_none());
     }
     #[test]
     fn roster_merges_actual_files_and_validates_uuids() {

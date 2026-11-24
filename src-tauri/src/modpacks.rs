@@ -270,7 +270,11 @@ pub async fn install_pack(
         let path = stage.0.join(&file.path);
         std::fs::create_dir_all(path.parent().ok_or("Missing parent")?).map_err(error)?;
         runtime::download(url, hash, &path, &|e| {
-            let phase=if e.phase==runtime::DownloadPhase::Complete {runtime::DownloadPhase::Verifying}else{e.phase};
+            let phase = if e.phase == runtime::DownloadPhase::Complete {
+                runtime::DownloadPhase::Verifying
+            } else {
+                e.phase
+            };
             report(runtime::DownloadProgress::new(
                 phase,
                 done + e.downloaded,
