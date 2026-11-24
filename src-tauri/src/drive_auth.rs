@@ -95,7 +95,8 @@ pub fn import(path: &Path) -> Result<()> {
 }
 fn random() -> String {
     format!(
-        "{}{}",
+        "{}{}{}",
+        uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     )
