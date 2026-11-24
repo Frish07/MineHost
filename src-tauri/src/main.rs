@@ -11,13 +11,13 @@ mod history;
 mod modpacks;
 mod modrinth;
 mod network;
-mod playit;
 mod players;
+mod playit;
 mod runtime;
 mod safety;
 mod software;
-mod worlds;
 mod win;
+mod worlds;
 
 use runtime::Runtime;
 use serde::{Deserialize, Serialize};
@@ -725,7 +725,13 @@ fn open_folder(state: State<'_, Shared>, id: String) -> Result<()> {
 fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> Result<()> {
     let _operation = begin(&state, &id)?;
     let mut inner = lock(&state)?;
-    if inner.agent.as_mut().is_some_and(playit::ManagedAgent::alive) {return Err("Stop the managed playit agent before deleting a server profile".into());}
+    if inner
+        .agent
+        .as_mut()
+        .is_some_and(playit::ManagedAgent::alive)
+    {
+        return Err("Stop the managed playit agent before deleting a server profile".into());
+    }
     let server = load(&inner, &id)?;
     if confirmation != server.name {
         return Err("Type the exact server name to confirm deletion".into());
@@ -800,7 +806,13 @@ fn main() {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let state = app.state::<Shared>();
             if let Ok(mut inner) = state.lock() {
-                if !inner.running.is_empty() || !inner.busy.is_empty() || inner.agent.as_mut().is_some_and(playit::ManagedAgent::alive) {
+                if !inner.running.is_empty()
+                    || !inner.busy.is_empty()
+                    || inner
+                        .agent
+                        .as_mut()
+                        .is_some_and(playit::ManagedAgent::alive)
+                {
                     api.prevent_exit();
                     let _ = app.emit("exit-blocked", ());
                     if let Some(window) = app.get_webview_window("main") {
