@@ -91,8 +91,13 @@ pub async fn search(
         .iter()
         .map(|loader| format!("categories:{loader}"))
         .collect();
+    let project_type = if software == Software::Fabric {
+        "mod"
+    } else {
+        "plugin"
+    };
     let facets = serde_json::to_string(&vec![
-        vec!["project_type:mod".into()],
+        vec![format!("project_type:{project_type}")],
         vec![format!("versions:{game}")],
         categories,
         vec![
