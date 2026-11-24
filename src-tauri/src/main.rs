@@ -10,11 +10,14 @@ mod forge;
 mod history;
 mod modpacks;
 mod modrinth;
+mod network;
+mod playit;
 mod players;
 mod runtime;
 mod safety;
 mod software;
 mod worlds;
+mod win;
 
 use runtime::Runtime;
 use serde::{Deserialize, Serialize};
@@ -73,6 +76,8 @@ struct Inner {
     running: HashMap<String, Running>,
     busy: HashSet<String>,
     logs: HashMap<String, VecDeque<String>>,
+    agent: Option<playit::ManagedAgent>,
+    claim: Option<playit::Claim>,
 }
 
 struct Operation {
@@ -719,7 +724,8 @@ fn open_folder(state: State<'_, Shared>, id: String) -> Result<()> {
 #[tauri::command]
 fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> Result<()> {
     let _operation = begin(&state, &id)?;
-    let inner = lock(&state)?;
+    let mut inner = lock(&state)?;
+    if inner.agent.as_mut().is_some_and(playit::ManagedAgent::alive) {return Err("Stop the managed playit agent before deleting a server profile".into());}
     let server = load(&inner, &id)?;
     if confirmation != server.name {
         return Err("Type the exact server name to confirm deletion".into());
@@ -736,6 +742,9 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
         .map_err(error)?;
     transaction
         .execute("DELETE FROM servers WHERE id=?1", [&id])
+        .map_err(error)?;
+    transaction
+        .execute("DELETE FROM network_settings WHERE server_id=?1", [&id])
         .map_err(error)?;
     transaction.commit().map_err(error)?;
     Ok(())
@@ -768,8 +777,8 @@ fn main() {
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let state = handle.state::<Shared>();
-                    if let Ok(inner) = state.lock() {
-                        if !inner.running.is_empty() || !inner.busy.is_empty() {
+                    if let Ok(mut inner) = state.lock() {
+                        if !inner.running.is_empty() || !inner.busy.is_empty() || inner.agent.as_mut().is_some_and(playit::ManagedAgent::alive) {
                             api.prevent_close();
                             let _ = handle.emit("exit-blocked", ());
                         }
@@ -782,15 +791,16 @@ fn main() {
         let db = rusqlite::Connection::open(root.join("config/minehost.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);")?;
         db.execute_batch(history::SCHEMA)?;
-        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new() })));
+        db.execute_batch(network::SCHEMA)?;
+        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None })));
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension])
+    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let state = app.state::<Shared>();
-            if let Ok(inner) = state.lock() {
-                if !inner.running.is_empty() || !inner.busy.is_empty() {
+            if let Ok(mut inner) = state.lock() {
+                if !inner.running.is_empty() || !inner.busy.is_empty() || inner.agent.as_mut().is_some_and(playit::ManagedAgent::alive) {
                     api.prevent_exit();
                     let _ = app.emit("exit-blocked", ());
                     if let Some(window) = app.get_webview_window("main") {
@@ -827,6 +837,8 @@ mod tests {
             running: HashMap::new(),
             busy: HashSet::new(),
             logs: HashMap::new(),
+            agent: None,
+            claim: None,
         };
         save(&inner, &server).unwrap();
         Arc::new(Mutex::new(inner))

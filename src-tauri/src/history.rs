@@ -98,6 +98,8 @@ mod tests {
             running: Default::default(),
             busy: Default::default(),
             logs: Default::default(),
+            agent: None,
+            claim: None,
         };
         insert(&inner, "server", "session", "Steve", "leave").unwrap();
         drop(inner);
