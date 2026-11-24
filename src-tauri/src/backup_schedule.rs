@@ -257,9 +257,16 @@ mod tests {
             let mut inner = lock(&shared).unwrap();
             inner.root = stage.0.clone();
             inner.db.execute_batch(SCHEMA).unwrap();
-            let id: String = inner.db.query_row("SELECT id FROM servers", [], |r| r.get(0)).unwrap();
+            let id: String = inner
+                .db
+                .query_row("SELECT id FROM servers", [], |r| r.get(0))
+                .unwrap();
             std::fs::create_dir_all(inner.root.join("servers").join(&id).join("world")).unwrap();
-            std::fs::write(inner.root.join("servers").join(&id).join("world/level.dat"), b"fixture-world").unwrap();
+            std::fs::write(
+                inner.root.join("servers").join(&id).join("world/level.dat"),
+                b"fixture-world",
+            )
+            .unwrap();
             id
         };
         let mut p = Plan::default();
@@ -276,13 +283,16 @@ mod tests {
         assert!(saved.last_success > 0);
         assert_eq!(saved.next_due, saved.last_success + 86400);
         tick(&shared, &id).unwrap();
-        let paths: Vec<_> = std::fs::read_dir(stage.0.join("backups")).unwrap().collect();
+        let paths: Vec<_> = std::fs::read_dir(stage.0.join("backups"))
+            .unwrap()
+            .collect();
         assert_eq!(paths.len(), 1);
         let path = paths[0].as_ref().unwrap().path();
         assert!(backups::preview(&path).is_ok());
         let mut zip = crate::archive::open(&path).unwrap();
         let mut text = String::new();
-        std::io::Read::read_to_string(&mut zip.by_name("world/level.dat").unwrap(), &mut text).unwrap();
+        std::io::Read::read_to_string(&mut zip.by_name("world/level.dat").unwrap(), &mut text)
+            .unwrap();
         assert_eq!(text, "fixture-world");
     }
     #[test]
