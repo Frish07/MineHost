@@ -270,7 +270,7 @@ pub async fn install(
     }
     let names = archive::tree(&work)?
         .into_iter()
-        .filter(|v| v.starts_with("libraries/"))
+        .filter(|v| v.starts_with("libraries/") || (!v.contains('/') && v.ends_with(".jar")))
         .collect::<Vec<_>>();
     archive::overlay(root, &work, &names)?;
     let loader_version = if software == Software::Forge {
