@@ -208,6 +208,9 @@ fn minecraft_matches(requirement: &str, game: &str) -> Result<bool> {
         req = req
             .replace(',', " ")
             .split_whitespace()
+            // Fabric's empty prerelease sorts below the stable release. Only stable
+            // Minecraft versions are offered, so semver's -0 has the same boundary.
+            .map(|part| part.strip_suffix('-').map_or_else(|| part.to_string(), |base| format!("{base}-0")))
             .collect::<Vec<_>>()
             .join(", ");
         if semver::VersionReq::parse(&req)
@@ -642,6 +645,10 @@ mod tests {
         assert!(minecraft_matches(">=1.21 <1.22", "1.21.11").unwrap());
         assert!(minecraft_matches("~1.21.11", "1.21.11").unwrap());
         assert!(!minecraft_matches("1.21", "1.21.11").unwrap());
+        assert!(minecraft_matches(">=1.21.11- <1.21.12-", "1.21.11").unwrap());
+        assert!(!minecraft_matches(">=1.21.11- <1.21.12-", "1.21.12").unwrap());
+        assert!(minecraft_matches(">1.21.11-", "1.21.11").unwrap());
+        assert!(!minecraft_matches("<=1.21.11-", "1.21.11").unwrap());
     }
     #[test]
     fn file_transaction_restores_previous_jars_if_a_later_move_fails() {

@@ -100,12 +100,11 @@ pub async fn search(
         vec![format!("project_type:{project_type}")],
         vec![format!("versions:{game}")],
         categories,
+        // API v2 version-specific searches still use the legacy server-side facet.
+        // Its environment facet omits older versions of otherwise server-compatible projects.
         vec![
-            "environment:client_and_server".into(),
-            "environment:server_only".into(),
-            "environment:server_only_client_optional".into(),
-            "environment:dedicated_server_only".into(),
-            "environment:client_only_server_optional".into(),
+            "server_side:required".into(),
+            "server_side:optional".into(),
         ],
     ])
     .map_err(error)?;
