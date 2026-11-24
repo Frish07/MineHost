@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
+import {HistoryPanel} from './HistoryPanel';
 type Props={id:string;language:'ru'|'en';locked:boolean;running:boolean;act:(task:()=>Promise<unknown>)=>Promise<void>};
 type Player={name:string;uuid:string|null;whitelist:boolean;operator:boolean;banned:boolean};
 export function PlayersPanel({id,language,locked,running,act}:Props){
@@ -13,5 +14,6 @@ export function PlayersPanel({id,language,locked,running,act}:Props){
     <form className="catalog-search" onSubmit={e=>{e.preventDefault();if(window.confirm(`${action}: ${name}?`))send(action,name);}}><input required minLength={3} maxLength={16} pattern="[A-Za-z0-9_]+" aria-label={ru?'Ник игрока':'Player name'} placeholder={ru?'Ник игрока':'Player name'} value={name} onChange={e=>setName(e.target.value)}/><select aria-label={ru?'Действие':'Action'} value={action} onChange={e=>setAction(e.target.value)}>{[['whitelist_add','Добавить в whitelist','Whitelist add'],['whitelist_remove','Убрать из whitelist','Whitelist remove'],['op','Выдать OP','Grant OP'],['deop','Снять OP','Revoke OP'],['ban','Забанить','Ban'],['pardon','Разбанить','Unban'],['kick','Отключить игрока','Kick']].map(([v,r,en])=><option key={v} value={v}>{ru?r:en}</option>)}</select><button className="primary" disabled={locked||!running}>{ru?'Отправить':'Send'}</button></form>
     <form className="catalog-search" onSubmit={e=>{e.preventDefault();send('say','',text);}}><input required maxLength={900} aria-label={ru?'Сообщение в чат':'Chat message'} placeholder={ru?'Сообщение в чат сервера':'Server chat message'} value={text} onChange={e=>setText(e.target.value)}/><button disabled={locked||!running||!text.trim()}>Say</button></form>
     <div className="addon-list">{players.map(player=><article className="addon-row" key={player.name.toLowerCase()}><button className="file-name" disabled={locked} onClick={()=>setName(player.name)}>{player.name}</button><small className="muted selectable">{player.uuid??'UUID —'}{player.whitelist?' · Whitelist':''}{player.operator?' · OP':''}{player.banned?' · BAN':''}</small></article>)}{!players.length&&<p className="muted">{ru?'Сервер ещё не записал игроков в свои списки.':'No players recorded by this server yet.'}</p>}</div>
+    <HistoryPanel id={id} language={language} locked={locked} act={act}/>
   </section>;
 }

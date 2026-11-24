@@ -1,8 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod addons;
+mod archive;
+mod backups;
+mod catalog;
+mod dimensions;
+mod forge;
+mod history;
 mod files;
 mod modrinth;
+mod modpacks;
 mod players;
 mod runtime;
 mod safety;
@@ -38,6 +45,8 @@ struct Server {
     java_major: u32,
     #[serde(default)]
     software: software::Software,
+    #[serde(default)]
+    loader_version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -54,6 +63,8 @@ struct Running {
     ram: u32,
     player_query: Option<uuid::Uuid>,
     players: Option<Vec<String>>,
+    connected: HashSet<String>,
+    session: String,
 }
 
 struct Inner {
@@ -157,21 +168,24 @@ fn list_servers(state: State<'_, Shared>) -> Result<Vec<ServerView>> {
 }
 
 #[tauri::command]
-fn create_server(
+async fn create_server(
     state: State<'_, Shared>,
     name: String,
     version: String,
     port: u16,
     ram_mb: u32,
     software: software::Software,
+    loader_version: Option<String>,
 ) -> Result<String> {
     if name.trim().is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err("Name must contain 1–80 printable characters".into());
     }
     safety::version(&version)?;
+    if let Some(loader)=loader_version.as_ref().filter(|v|!v.is_empty()){safety::version(loader)?;}
     if port < 1024 || !(512..=RAM_BUDGET).contains(&ram_mb) {
         return Err("Port must be 1024–65535; RAM 512–12288 MiB".into());
     }
+    let java_major=software::required_java(&version).await?;
     let inner = lock(&state)?;
     let server = Server {
         id: uuid::Uuid::new_v4().to_string(),
@@ -181,8 +195,9 @@ fn create_server(
         ram_mb,
         eula: false,
         installed: false,
-        java_major: 21,
+        java_major,
         software,
+        loader_version,
     };
     save(&inner, &server)?;
     let dir = directory(&inner, &server.id)?;
@@ -203,6 +218,8 @@ async fn software_versions(software: software::Software) -> Result<Vec<String>> 
 async fn install_software(
     state: State<'_, Shared>,
     id: String,
+    custom_path: String,
+    installer_consent: bool,
     on_progress: tauri::ipc::Channel<runtime::DownloadProgress>,
 ) -> Result<()> {
     let operation = begin(&state, &id)?;
@@ -213,14 +230,21 @@ async fn install_software(
     let report = |progress| {
         let _ = on_progress.send(progress);
     };
-    let major = server
+    let (major,size) = if matches!(server.software,software::Software::Forge|software::Software::Neoforge) {
+        if !installer_consent {return Err("Explicit permission to execute the official Minecraft loader installer is required".into());}
+        let major=software::required_java(&server.version).await?;
+        let root={lock(&state)?.root.clone()};
+        let java=runtime::detect_java(&root,major,&custom_path).map_err(|e|format!("First detect or download Java {major} in Server & Java. {e}"))?;
+        let size=forge::install(server.software,&server.version,server.loader_version.as_deref(),&dir,Path::new(&java.path),&report).await?;
+        (major,size)
+    } else {let major=server
         .software
-        .install(&server.version, &dir, &report)
+        .install_pinned(&server.version, &dir, server.loader_version.as_deref(), &report)
         .await
         .map_err(|e| format!("{:?} {}: {e}", server.software, server.version))?;
     let size = std::fs::metadata(dir.join(server.software.launcher()))
         .map_err(error)?
-        .len();
+        .len(); (major,size)};
     finish_paper_install(operation, major)?;
     let _ = on_progress.send(runtime::DownloadProgress::new(
         runtime::DownloadPhase::Complete,
@@ -254,11 +278,12 @@ fn accept_eula(state: State<'_, Shared>, id: String, consent: bool) -> Result<()
 }
 
 #[tauri::command]
-fn java_status(state: State<'_, Shared>, id: String, custom_path: String) -> Result<Runtime> {
-    let (major, root) = {
+async fn java_status(state: State<'_, Shared>, id: String, custom_path: String) -> Result<Runtime> {
+    let (server, root) = {
         let inner = lock(&state)?;
-        (load(&inner, &id)?.java_major, inner.root.clone())
+        (load(&inner, &id)?, inner.root.clone())
     };
+    let major=if server.installed {server.java_major}else{software::required_java(&server.version).await?};
     runtime::detect_java(&root, major, &custom_path)
 }
 
@@ -283,9 +308,9 @@ async fn install_java(state: State<'_, Shared>, id: String, consent: bool) -> Re
     };
     let major = {
         let inner = lock(&state)?;
-        load(&inner, &id)?.java_major
+        load(&inner, &id)?.version
     };
-    runtime::install_java(&root, major).await
+    runtime::install_java(&root, software::required_java(&major).await?).await
 }
 
 #[derive(Clone, Serialize)]
@@ -296,6 +321,7 @@ struct LogEvent {
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
+        if let Err(e)=history::record(&mut inner,id,&line){eprintln!("Connection history: {e}");}
         if let Some(running) = inner.running.get_mut(id) {
             if running.player_query.is_some() {
                 if let Some(names) = players::online_line(&line) {
@@ -373,14 +399,9 @@ fn start_server(
     let port_probe = std::net::TcpListener::bind(("0.0.0.0", server.port))
         .map_err(|e| format!("Port unavailable: {e}"))?;
     let mut command = Command::new(java.path);
+    command.args(["-Xms256M", &format!("-Xmx{}M",server.ram_mb)]);
+    if matches!(server.software,software::Software::Forge|software::Software::Neoforge) {command.args(forge::launch_arguments(&dir,server.software,&server.version)?);}else{command.args(["-jar",server.software.launcher(),"nogui"]);}
     command
-        .args([
-            "-Xms256M",
-            &format!("-Xmx{}M", server.ram_mb),
-            "-jar",
-            server.software.launcher(),
-            "nogui",
-        ])
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -396,6 +417,8 @@ fn start_server(
             ram: server.ram_mb,
             player_query: None,
             players: None,
+            connected: HashSet::new(),
+            session: uuid::Uuid::new_v4().to_string(),
         },
     );
     inner.logs.insert(id.clone(), VecDeque::new());
@@ -410,6 +433,7 @@ fn start_server(
     std::thread::spawn(move || {
         let result = child.wait();
         if let Ok(mut inner) = shared.lock() {
+            if let Err(e)=history::end(&inner,&id){eprintln!("Connection history: {e}");}
             inner.running.remove(&id);
         }
         append_log(
@@ -533,9 +557,10 @@ async fn search_addons(
     query: String,
     offset: u32,
     sort: String,
+    category: Option<String>,
 ) -> Result<modrinth::SearchResult> {
     let (server, _) = profile_path(&state, &id)?;
-    modrinth::search(server.software, &server.version, &query, offset, &sort).await
+    modrinth::search(server.software, &server.version, &query, offset, &sort, category.as_deref()).await
 }
 
 #[tauri::command]
@@ -660,61 +685,13 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
 
 #[tauri::command]
 async fn backup_server(state: State<'_, Shared>, id: String) -> Result<String> {
-    let shared = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _operation = begin(&shared, &id)?;
-        let (dir, root) = {
-            let inner = lock(&shared)?;
-            (directory(&inner, &id)?, inner.root.clone())
-        };
-        let destination = root
-            .join("backups")
-            .join(format!("{}-{}.zip", id, uuid::Uuid::new_v4()));
-        safety::reject_links(&destination)?;
-        let file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&destination)
-            .map_err(error)?;
-        let mut writer = zip::ZipWriter::new(file);
-        fn add(writer: &mut zip::ZipWriter<std::fs::File>, root: &Path, dir: &Path) -> Result<()> {
-            for entry in std::fs::read_dir(dir).map_err(error)? {
-                let path = entry.map_err(error)?.path();
-                safety::reject_links(&path)?;
-                if path.is_dir() {
-                    add(writer, root, &path)?;
-                } else if path.is_file() {
-                    let name = path
-                        .strip_prefix(root)
-                        .map_err(error)?
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    writer
-                        .start_file(
-                            name,
-                            zip::write::SimpleFileOptions::default()
-                                .compression_method(zip::CompressionMethod::Deflated),
-                        )
-                        .map_err(error)?;
-                    std::io::copy(&mut std::fs::File::open(&path).map_err(error)?, writer)
-                        .map_err(error)?;
-                }
-            }
-            Ok(())
-        }
-        let result = add(&mut writer, &dir, &dir);
-        if let Err(e) = result {
-            drop(writer);
-            let _ = std::fs::remove_file(&destination);
-            return Err(e);
-        }
-        writer.finish().map_err(error)?.sync_all().map_err(error)?;
-        Ok(destination.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(error)?
+    let shared=state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||{
+        let _operation=begin(&shared,&id)?;
+        let (server,root,dir)={let inner=lock(&shared)?;(load(&inner,&id)?,inner.root.clone(),directory(&inner,&id)?)};
+        Ok(backups::create(&root,&server,&dir)?.to_string_lossy().into_owned())
+    }).await.map_err(error)?
 }
-
 fn main() {
     let app = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).setup(|app| {
         if let Some(window) = app.get_webview_window("main") {
@@ -735,9 +712,10 @@ fn main() {
         for name in ["servers", "backups", "cache", "logs", "config", "runtimes", "trash"] { std::fs::create_dir_all(root.join(name))?; }
         let db = rusqlite::Connection::open(root.join("config/minehost.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);")?;
+        db.execute_batch(history::SCHEMA)?;
         app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new() })));
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players])
+    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, dimensions::transfer_dimension])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -772,6 +750,7 @@ mod tests {
             installed: false,
             java_major: 21,
             software: software::Software::Paper,
+            loader_version: None,
         };
         let inner = Inner {
             db,

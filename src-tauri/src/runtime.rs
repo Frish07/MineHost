@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-const USER_AGENT: &str = "MineHost/0.2.0 (https://github.com/Frish07/MineHost)";
+const USER_AGENT: &str = "MineHost/0.4.0 (https://github.com/Frish07/MineHost)";
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +117,10 @@ pub(crate) async fn download(
                 | "api.purpurmc.org"
                 | "meta.fabricmc.net"
                 | "cdn.modrinth.com"
+                | "maven.minecraftforge.net"
+                | "maven.neoforged.net"
+                | "raw.githubusercontent.com"
+                | "gitlab.com"
         )
     {
         return Err(format!("Unexpected download origin: {host}"));

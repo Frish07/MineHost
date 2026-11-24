@@ -8,8 +8,8 @@ export type DownloadProgress = {
 };
 
 export const downloadLabels = {
-  ru: { resolving: 'Получение данных…', downloading: 'Скачивание…', verifying: 'Проверка файла…', installing: 'Сохранение файлов…', complete: 'Установлено', failed: 'Не удалось установить', title: 'Загрузка' },
-  en: { resolving: 'Getting metadata…', downloading: 'Downloading…', verifying: 'Verifying file…', installing: 'Saving files…', complete: 'Installed', failed: 'Installation failed', title: 'Download' },
+  ru: { resolving: 'Получение данных…', downloading: 'Скачивание…', verifying: 'Проверка файла…', installing: 'Установка и подготовка файлов…', complete: 'Установлено', failed: 'Не удалось установить', title: 'Загрузка' },
+  en: { resolving: 'Getting metadata…', downloading: 'Downloading…', verifying: 'Verifying file…', installing: 'Installing and preparing files…', complete: 'Installed', failed: 'Installation failed', title: 'Download' },
 };
 
 export function downloadPercentage(progress: DownloadProgress): number | undefined {

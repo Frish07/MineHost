@@ -3,6 +3,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { DownloadStatus } from './DownloadStatus';
 import { downloadedSize, type DownloadProgress } from './download';
+import {GalleryPanel} from './GalleryPanel';
 
 type Installed = {fileName: string; enabled: boolean; size: number; projectId: string | null; versionId: string | null; versionNumber: string | null};
 type Hit = {project_id: string; title: string; description: string; downloads: number};
@@ -20,6 +21,9 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('relevance');
+  const [category,setCategory]=useState('');
+  const [categories,setCategories]=useState<{name:string}[]>([]);
+  useEffect(()=>{void invoke<{name:string}[]>('catalog_categories').then(setCategories).catch(()=>setCategories([]));},[]);
   const [hits, setHits] = useState<Hit[]>([]);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
@@ -35,7 +39,7 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
   const run = (task: () => Promise<unknown>) => {void act(async () => {const result = await task(); await refresh(); return result;});};
   const editable = !locked && !running && installedCore;
   const search = (position = 0) => {void act(async () => {
-    const response = await invoke<{hits: Hit[]; total_hits: number}>('search_addons', {id, query, offset: position, sort});
+    const response = await invoke<{hits: Hit[]; total_hits: number}>('search_addons', {id, query, offset: position, sort, category:category||null});
     setHits(response.hits); setTotal(response.total_hits); setOffset(position); setSearched(true);
   });};
   const preview = async (root: string) => {setPlan({root, items: await invoke<PlanItem[]>('plan_addon', {id, versionId: root})});};
@@ -73,10 +77,11 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
     {progress && <DownloadStatus progress={progress} language={language}/>}
     {plan && <div className="install-plan"><h3>{t.plan}</h3><p className="muted">{t.planHint}</p>{plan.items.map(item => <div key={item.versionId} className="plan-item"><strong>{item.title} <small>{item.versionNumber}</small></strong><span>{item.fileName} · {downloadedSize(item.size, language)}</span></div>)}<div className="button-row"><button className="primary" disabled={!editable || !consent} onClick={install}>{t.install} · {plan.items.length}</button><button disabled={locked} onClick={() => setPlan(null)}>{t.cancel}</button></div></div>}
     {tab === 'installed' ? <div className="addon-list">{!installed.length && <p className="muted">{t.empty}</p>}{installed.map(addon => <article className="addon-row" key={addon.fileName}><div><strong>{addon.fileName}</strong><p className="muted">{addon.enabled ? t.enabled : t.disabled} · {downloadedSize(addon.size, language)} · {addon.versionNumber ?? t.manual}</p></div><div className="button-row"><button disabled={!editable} onClick={() => run(() => invoke('set_addon_enabled', {id, fileName: addon.fileName, enabled: !addon.enabled}))}>{addon.enabled ? t.disable : t.enable}</button>{addon.projectId && <button disabled={!editable} onClick={() => update(addon)}>{t.update}</button>}<button className="danger" disabled={!editable} onClick={() => {if(window.confirm(`${t.deleteConfirm}\n${addon.fileName}`)) run(() => invoke('remove_addon', {id, fileName: addon.fileName, confirmation: addon.fileName}));}}>{t.remove}</button></div></article>)}</div> : <>
-      <form className="catalog-search" onSubmit={e => {e.preventDefault(); search();}}><input aria-label={t.search} maxLength={100} placeholder={t.placeholder} value={query} onChange={e => setQuery(e.target.value)}/><select aria-label={t.relevance} value={sort} onChange={e => setSort(e.target.value)}><option value="relevance">{t.relevance}</option><option value="downloads">{t.downloads}</option><option value="updated">{t.updated}</option></select><button className="primary" disabled={locked}>{t.search}</button></form>
+      <form className="catalog-search" onSubmit={e => {e.preventDefault(); search();}}><input aria-label={t.search} maxLength={100} placeholder={t.placeholder} value={query} onChange={e => setQuery(e.target.value)}/><select aria-label={t.relevance} value={sort} onChange={e => setSort(e.target.value)}><option value="relevance">{t.relevance}</option><option value="downloads">{t.downloads}</option><option value="updated">{t.updated}</option></select><select aria-label={language === 'ru' ? 'Категория' : 'Category'} value={category} onChange={e=>setCategory(e.target.value)}><option value="">{language === 'ru' ? 'Все категории' : 'All categories'}</option>{categories.map(v=><option key={v.name}>{v.name}</option>)}</select><button className="primary" disabled={locked}>{t.search}</button></form>
       <p className="muted">{t.note}</p>{searched && !hits.length && <p className="muted">{t.noResults}</p>}
       <div className="catalog-grid">{hits.map(hit => <article className="catalog-card" key={hit.project_id}><h3>{hit.title}</h3><p className="muted">{hit.description}</p><small>{hit.downloads.toLocaleString()} ↓</small><div className="button-row"><button disabled={locked} onClick={() => choose(hit)}>{t.choose}</button><button disabled={locked} onClick={() => {void act(() => invoke('open_addon_project', {projectId: hit.project_id}));}}>{t.project}</button></div></article>)}</div>
       {searched && <div className="catalog-pages"><button disabled={locked || offset === 0} onClick={() => search(Math.max(0, offset - 20))}>{t.previous}</button><span>{offset + 1}–{offset + hits.length} / {total.toLocaleString()}</span><button disabled={locked || offset + 20 >= total || offset >= 10000} onClick={() => search(offset + 20)}>{t.next}</button></div>}
+      {project && <GalleryPanel projectId={project.project_id} language={language}/>}
       {project && <div className="install-plan"><h3>{project.title}</h3><label>{t.versions}<select value={version} onChange={e => setVersion(e.target.value)} disabled={locked || !versions.length}>{!versions.length && <option value="">{t.noVersions}</option>}{versions.map(v => <option key={v.id} value={v.id}>{v.name} · {v.version_number}</option>)}</select></label><button disabled={locked || !version} onClick={() => {void act(() => preview(version));}}>{t.preview}</button></div>}
     </>}
   </section>;

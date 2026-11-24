@@ -80,6 +80,7 @@ pub async fn search(
     query: &str,
     offset: u32,
     sort: &str,
+    category: Option<&str>,
 ) -> Result<SearchResult> {
     software.addon_directory()?;
     if query.len() > 100 || offset > 10000 || !["relevance", "downloads", "updated"].contains(&sort)
@@ -91,19 +92,21 @@ pub async fn search(
         .iter()
         .map(|loader| format!("categories:{loader}"))
         .collect();
-    let project_type = if software == Software::Fabric {
+    let project_type = if matches!(software, Software::Fabric|Software::Forge|Software::Neoforge) {
         "mod"
     } else {
         "plugin"
     };
-    let facets = serde_json::to_string(&vec![
+    let mut filters=vec![
         vec![format!("project_type:{project_type}")],
         vec![format!("versions:{game}")],
         categories,
         // API v2 version-specific searches still use the legacy server-side facet.
         // Its environment facet omits older versions of otherwise server-compatible projects.
         vec!["server_side:required".into(), "server_side:optional".into()],
-    ])
+    ];
+    if let Some(category)=category.filter(|v|!v.is_empty()){identifier(category)?;filters.push(vec![format!("categories:{category}")]);}
+    let facets = serde_json::to_string(&filters)
     .map_err(error)?;
     let url = query_url(
         "search",
@@ -316,7 +319,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Official Modrinth API, GitHub Actions only"]
     async fn modrinth_catalog_contract() {
-        let results = search(Software::Paper, "1.21.11", "luckperms", 0, "relevance")
+        let results = search(Software::Paper, "1.21.11", "luckperms", 0, "relevance", None)
             .await
             .unwrap();
         assert!(results.hits.iter().any(|v| v.project_id == "Vebnzrzj"));

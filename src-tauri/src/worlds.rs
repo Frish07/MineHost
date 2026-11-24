@@ -19,7 +19,7 @@ pub struct World {
     end: bool,
 }
 
-fn world_name(value: &str) -> Result<()> {
+pub(crate) fn world_name(value: &str) -> Result<()> {
     files::name(value)?;
     if value.len() > 48
         || !value
