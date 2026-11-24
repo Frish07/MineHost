@@ -572,18 +572,57 @@ pub async fn upnp_change(
 mod tests {
     use super::*;
     #[test]
-    #[ignore="Temporary owned firewall rule on disposable Windows GitHub runner only"]
+    #[ignore = "Temporary owned firewall rule on disposable Windows GitHub runner only"]
     fn firewall_rule_contract() {
-        let stage=crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
-        let id=uuid::Uuid::new_v4().to_string();let port=49173;
-        struct Cleanup {root:std::path::PathBuf,id:String,port:u16}
-        impl Drop for Cleanup {fn drop(&mut self){let _=win::powershell(&self.root,SCRIPT,&json!({"action":"firewall_remove","id":self.id,"port":self.port}),false);}}
-        let _cleanup=Cleanup{root:stage.0.clone(),id:id.clone(),port};
+        let stage = crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let port = 49173;
+        struct Cleanup {
+            root: std::path::PathBuf,
+            id: String,
+            port: u16,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = win::powershell(
+                    &self.root,
+                    SCRIPT,
+                    &json!({"action":"firewall_remove","id":self.id,"port":self.port}),
+                    false,
+                );
+            }
+        }
+        let _cleanup = Cleanup {
+            root: stage.0.clone(),
+            id: id.clone(),
+            port,
+        };
         win::powershell(&stage.0,SCRIPT,&json!({"action":"firewall_add","id":id,"port":port,"profile":"Private","remote":"LocalSubnet"}),false).unwrap();
-        let value=win::powershell(&stage.0,SCRIPT,&json!({"action":"firewall_get","id":id,"port":port}),false).unwrap();
-        assert_eq!(value["present"],true);assert_eq!(value["port"],port.to_string());assert_eq!(value["enabled"],true);
-        win::powershell(&stage.0,SCRIPT,&json!({"action":"firewall_remove","id":id,"port":port}),false).unwrap();
-        let value=win::powershell(&stage.0,SCRIPT,&json!({"action":"firewall_get","id":id,"port":port}),false).unwrap();assert_eq!(value["present"],false);
+        let value = win::powershell(
+            &stage.0,
+            SCRIPT,
+            &json!({"action":"firewall_get","id":id,"port":port}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(value["present"], true);
+        assert_eq!(value["port"], port.to_string());
+        assert_eq!(value["enabled"], true);
+        win::powershell(
+            &stage.0,
+            SCRIPT,
+            &json!({"action":"firewall_remove","id":id,"port":port}),
+            false,
+        )
+        .unwrap();
+        let value = win::powershell(
+            &stage.0,
+            SCRIPT,
+            &json!({"action":"firewall_get","id":id,"port":port}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(value["present"], false);
     }
     #[test]
     fn distinguishes_nat_without_false_cgnat_claim() {
