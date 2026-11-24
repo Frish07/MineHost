@@ -116,12 +116,23 @@ fn begin(shared: &Shared, id: &str) -> Result<Operation> {
     })
 }
 
-async fn profile_task<T: Send + 'static>(shared: Shared, id: String, stopped: bool, task: impl FnOnce(Server, PathBuf) -> Result<T> + Send + 'static) -> Result<T> {
+async fn profile_task<T: Send + 'static>(
+    shared: Shared,
+    id: String,
+    stopped: bool,
+    task: impl FnOnce(Server, PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _operation = if stopped {Some(begin(&shared,&id)?)} else {None};
-        let (server,root)=profile_path(&shared,&id)?;
-        task(server,root)
-    }).await.map_err(error)?
+        let _operation = if stopped {
+            Some(begin(&shared, &id)?)
+        } else {
+            None
+        };
+        let (server, root) = profile_path(&shared, &id)?;
+        task(server, root)
+    })
+    .await
+    .map_err(error)?
 }
 
 #[tauri::command]
@@ -285,9 +296,11 @@ struct LogEvent {
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
-        if let Some(running)=inner.running.get_mut(id) {
+        if let Some(running) = inner.running.get_mut(id) {
             if running.player_query.is_some() {
-                if let Some(names)=players::online_line(&line) {running.players=Some(names);}
+                if let Some(names) = players::online_line(&line) {
+                    running.players = Some(names);
+                }
             }
         }
         let logs = inner.logs.entry(id.into()).or_default();
