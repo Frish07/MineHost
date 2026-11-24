@@ -837,7 +837,7 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn memory_state() -> Shared {
+    pub(crate) fn memory_state() -> Shared {
         let db = rusqlite::Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);").unwrap();
         let server = Server {

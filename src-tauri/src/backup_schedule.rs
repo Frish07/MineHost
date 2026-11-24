@@ -117,6 +117,7 @@ fn automatic_name(id: &str, name: &str) -> bool {
 fn retain_local(root: &Path, id: &str, keep: usize) -> Result<()> {
     let folder = root.join("backups");
     safety::reject_links(&folder)?;
+    let protected = drive::pending_name(id)?;
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(folder).map_err(error)? {
         let entry = entry.map_err(error)?;
@@ -130,7 +131,11 @@ fn retain_local(root: &Path, id: &str, keep: usize) -> Result<()> {
         }
     }
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-    for (_, _, path) in entries.into_iter().skip(keep) {
+    for (_, _, path) in entries
+        .into_iter()
+        .filter(|(_, name, _)| Some(name) != protected.as_ref())
+        .skip(keep)
+    {
         safety::reject_links(&path)?;
         std::fs::remove_file(path).map_err(error)?;
     }
@@ -185,11 +190,15 @@ fn tick(shared: &Shared, id: &str) -> Result<()> {
     if !due(&p, now()) {
         return Ok(());
     }
+    let (_job, cancel) = drive::job(shared)?;
+    p = read(shared, id)?;
+    if !due(&p, now()) {
+        return Ok(());
+    }
     {
         let inner = lock(shared)?;
         if inner.running.contains_key(id)
             || inner.busy.contains(id)
-            || inner.busy.contains("google-drive")
             || inner.busy.contains("java-install")
         {
             drop(inner);
@@ -198,7 +207,6 @@ fn tick(shared: &Shared, id: &str) -> Result<()> {
             return Ok(());
         }
     }
-    let (_job, cancel) = drive::job(shared)?;
     let _profile = crate::begin(shared, id)?;
     p.last_attempt = now();
     p.message = "Creating scheduled backup".into();
@@ -241,6 +249,42 @@ pub fn start(shared: &Shared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scheduled_backup_waits_for_operations_and_advances_once() {
+        let stage = crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        let shared = crate::tests::memory_state();
+        let id = {
+            let mut inner = lock(&shared).unwrap();
+            inner.root = stage.0.clone();
+            inner.db.execute_batch(SCHEMA).unwrap();
+            let id: String = inner.db.query_row("SELECT id FROM servers", [], |r| r.get(0)).unwrap();
+            std::fs::create_dir_all(inner.root.join("servers").join(&id).join("world")).unwrap();
+            std::fs::write(inner.root.join("servers").join(&id).join("world/level.dat"), b"fixture-world").unwrap();
+            id
+        };
+        let mut p = Plan::default();
+        p.settings.enabled = true;
+        p.settings.keep_local = 1;
+        p.next_due = now() - 1;
+        write(&shared, &id, &p).unwrap();
+        let operation = crate::begin(&shared, &id).unwrap();
+        tick(&shared, &id).unwrap();
+        assert_eq!(read(&shared, &id).unwrap().last_success, 0);
+        drop(operation);
+        tick(&shared, &id).unwrap();
+        let saved = read(&shared, &id).unwrap();
+        assert!(saved.last_success > 0);
+        assert_eq!(saved.next_due, saved.last_success + 86400);
+        tick(&shared, &id).unwrap();
+        let paths: Vec<_> = std::fs::read_dir(stage.0.join("backups")).unwrap().collect();
+        assert_eq!(paths.len(), 1);
+        let path = paths[0].as_ref().unwrap().path();
+        assert!(backups::preview(&path).is_ok());
+        let mut zip = crate::archive::open(&path).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("world/level.dat").unwrap(), &mut text).unwrap();
+        assert_eq!(text, "fixture-world");
+    }
     #[test]
     fn schedule_and_retention_protect_manual_copies() {
         let stage = crate::archive::Stage::new(&std::env::temp_dir()).unwrap();

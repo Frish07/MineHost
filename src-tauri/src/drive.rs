@@ -5,7 +5,7 @@ use crate::{
 };
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -220,6 +220,9 @@ fn digest(path: &Path, cancel: &AtomicBool) -> Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+pub fn pending_name(id: &str) -> Result<Option<String>> {
+    Ok(pending()?.filter(|p| p.profile == id).map(|p| p.name))
+}
 fn pending() -> Result<Option<Pending>> {
     win::credential_read(PENDING)?
         .map(|s| serde_json::from_str(&s).map_err(|_| "Invalid saved upload session".into()))
@@ -325,6 +328,7 @@ fn completed(
     }
     let local = root(shared)?.join("backups").join(&p.name);
     let mut hash = md5::Md5::new();
+    let mut sha = Sha256::new();
     let mut input = std::fs::File::open(local).map_err(error)?;
     let mut buf = vec![0; 1024 * 1024];
     loop {
@@ -333,8 +337,11 @@ fn completed(
             break;
         }
         hash.update(&buf[..n]);
+        sha.update(&buf[..n]);
     }
-    if file.md5_checksum != format!("{:x}", hash.finalize()) {
+    if file.md5_checksum != format!("{:x}", hash.finalize())
+        || p.sha256 != format!("{:x}", sha.finalize())
+    {
         return Err("Drive archive MD5 checksum mismatch".into());
     }
     win::credential_delete(PENDING)?;
