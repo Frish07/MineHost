@@ -107,7 +107,10 @@ pub fn domain(value: &str) -> Result<String> {
     if value.len() > 253
         || !value.contains('.')
         || value.parse::<IpAddr>().is_ok()
-        || !value.rsplit('.').next().is_some_and(|v|v.bytes().any(|b|b.is_ascii_alphabetic()))
+        || !value
+            .rsplit('.')
+            .next()
+            .is_some_and(|v| v.bytes().any(|b| b.is_ascii_alphabetic()))
         || !value.split('.').all(|part| {
             !part.is_empty()
                 && part.len() <= 63
@@ -135,10 +138,12 @@ pub fn global(ip: IpAddr) -> bool {
                 && !(a == 100 && (64..=127).contains(&b))
                 && !v.is_documentation()
                 && !(a == 198 && (b == 18 || b == 19))
-                && !(a==192 && b==0 && c==0)
+                && !(a == 192 && b == 0 && c == 0)
         }
         IpAddr::V6(v) => {
-            if let Some(v4)=v.to_ipv4_mapped(){return global(IpAddr::V4(v4));}
+            if let Some(v4) = v.to_ipv4_mapped() {
+                return global(IpAddr::V4(v4));
+            }
             let o = v.octets();
             !v.is_loopback()
                 && !v.is_unspecified()
@@ -146,8 +151,8 @@ pub fn global(ip: IpAddr) -> bool {
                 && (o[0] & 0xfe) != 0xfc
                 && !(o[0] == 0xfe && (o[1] & 0xc0) == 0x80)
                 && v.segments()[..2] != [0x2001, 0x0db8]
-                && (o[0]&0xe0)==0x20
-                && !(v.segments()[0]==0x3fff && v.segments()[1]&0xf000==0)
+                && (o[0] & 0xe0) == 0x20
+                && !(v.segments()[0] == 0x3fff && v.segments()[1] & 0xf000 == 0)
         }
     }
 }
@@ -165,7 +170,9 @@ pub fn host(value: &str) -> Result<String> {
 pub fn endpoint(address: &str) -> Result<(String, u16)> {
     let text = address.trim();
     if let Ok(socket) = text.parse::<SocketAddr>() {
-        if socket.port()==0{return Err("Port must be 1–65535".into());}
+        if socket.port() == 0 {
+            return Err("Port must be 1–65535".into());
+        }
         return Ok((host(&socket.ip().to_string())?, socket.port()));
     }
     let (name, port) = if let Some((name, port)) = text.rsplit_once(':') {
@@ -567,7 +574,11 @@ pub async fn upnp_change(
     if action != "upnp_get" && !consent {
         return Err("Approve changing the router's port mapping".into());
     }
-    let internal_ip=if action=="upnp_get"&&internal_ip.is_empty(){"0.0.0.0".into()}else{internal_ip};
+    let internal_ip = if action == "upnp_get" && internal_ip.is_empty() {
+        "0.0.0.0".into()
+    } else {
+        internal_ip
+    };
     let ip = internal_ip
         .parse::<Ipv4Addr>()
         .map_err(|_| "Select a local IPv4 address")?;
