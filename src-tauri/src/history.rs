@@ -10,7 +10,7 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 pub fn parse(line: &str) -> Option<(String, &'static str)> {
-    let body = line.rsplit_once(": ").map(|(_, v)| v).unwrap_or(line);
+    let body = line.split_once("]: ").map(|(_, v)| v).unwrap_or(line);
     for (suffix, kind) in [(" joined the game", "join"), (" left the game", "leave")] {
         if let Some(name) = body.strip_suffix(suffix) {
             if players::username(name).is_ok() {
@@ -122,6 +122,7 @@ mod tests {
             Some(("Steve".into(), "join"))
         );
         assert!(parse("[Server thread/INFO]: <Alex> Steve joined the game").is_none());
+        assert!(parse("[Server thread/INFO]: <Alex> : Steve joined the game").is_none());
         assert!(parse("Player list unavailable").is_none());
     }
 }

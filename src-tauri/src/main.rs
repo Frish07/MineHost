@@ -229,7 +229,8 @@ async fn install_software(
         let inner = lock(&state)?;
         (load(&inner, &id)?, directory(&inner, &id)?)
     };
-    let report = |progress| {
+    let report = |mut progress: runtime::DownloadProgress| {
+        if progress.phase==runtime::DownloadPhase::Complete {progress.phase=runtime::DownloadPhase::Installing;}
         let _ = on_progress.send(progress);
     };
     let (major, size) = if matches!(
@@ -727,10 +728,10 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     std::fs::create_dir_all(&trash).map_err(error)?;
     safety::reject_links(&trash)?;
     std::fs::rename(dir, trash.join(format!("{}-{}", id, uuid::Uuid::new_v4()))).map_err(error)?;
-    inner
-        .db
-        .execute("DELETE FROM servers WHERE id=?1", [id])
-        .map_err(error)?;
+    let transaction=inner.db.unchecked_transaction().map_err(error)?;
+    transaction.execute("DELETE FROM connection_history WHERE server_id=?1",[&id]).map_err(error)?;
+    transaction.execute("DELETE FROM servers WHERE id=?1",[&id]).map_err(error)?;
+    transaction.commit().map_err(error)?;
     Ok(())
 }
 
@@ -777,7 +778,7 @@ fn main() {
         db.execute_batch(history::SCHEMA)?;
         app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new() })));
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, dimensions::transfer_dimension])
+    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

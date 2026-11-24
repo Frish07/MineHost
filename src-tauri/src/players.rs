@@ -80,7 +80,8 @@ fn records(root: &Path) -> Result<Vec<Player>> {
     Ok(result.into_values().collect())
 }
 pub fn online_line(line: &str) -> Option<Vec<String>> {
-    let (_, body) = line.rsplit_once("There are ")?;
+    let body = line.split_once("]: ").map(|(_, v)| v).unwrap_or(line);
+    let body = body.strip_prefix("There are ")?;
     let (count, rest) = body.split_once(" of a max of ")?;
     let count = count.parse::<usize>().ok()?;
     let (maximum, names) = rest.split_once(" players online:")?;
@@ -208,6 +209,7 @@ mod tests {
             .is_empty());
         assert!(online_line("There are 2 of a max of 20 players online: Steve").is_none());
         assert!(online_line("Players: unknown").is_none());
+        assert!(online_line("[Server thread/INFO]: <Alex> There are 0 of a max of 20 players online:").is_none());
     }
     #[test]
     fn roster_merges_actual_files_and_validates_uuids() {

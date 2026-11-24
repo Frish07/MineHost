@@ -282,6 +282,13 @@ pub async fn restore_backup(
     .await
     .map_err(error)?
 }
+#[tauri::command]
+pub async fn import_backup(state:State<'_,Shared>,id:String,source:String)->Result<String>{let shared=state.inner().clone();tauri::async_runtime::spawn_blocking(move||{
+    let _operation=crate::begin(&shared,&id)?;let (server,root)={let inner=crate::lock(&shared)?;(crate::load(&inner,&id)?,inner.root.clone())};
+    let source=PathBuf::from(source);let mut zip=archive::open(&source)?;archive::entries(&mut zip)?;if let Some(saved)=metadata(&mut zip)?{if saved.software!=server.software||saved.version!=server.version{return Err("Import into a profile with the same core and Minecraft version".into());}}drop(zip);
+    let folder=root.join("backups");safety::reject_links(&folder)?;std::fs::create_dir_all(&folder).map_err(error)?;let name=format!("{}-{}.zip",id,uuid::Uuid::new_v4());let target=folder.join(&name);
+    let result=(||{let mut output=std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(error)?;let input=std::fs::File::open(&source).map_err(error)?;let size=std::io::copy(&mut input.take(archive::LIMIT+1),&mut output).map_err(error)?;if size>archive::LIMIT{return Err("Backup exceeds 32 GiB".into());}output.sync_all().map_err(error)?;drop(output);preview(&target)?;Ok(name)})();if result.is_err(){let _=std::fs::remove_file(&target);}result
+}).await.map_err(error)?}
 #[cfg(test)]
 mod tests {
     use super::*;

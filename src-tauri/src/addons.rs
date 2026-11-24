@@ -312,7 +312,7 @@ pub fn validate_jar(
                 "META-INF/mods.toml"
             };
             if jar.by_name(descriptor).is_err()
-                && !(software == Software::Neoforge && jar.by_name("META-INF/mods.toml").is_ok())
+                && !(software == Software::Neoforge && matches!(game,"1.20.2"|"1.20.3"|"1.20.4") && jar.by_name("META-INF/mods.toml").is_ok())
             {
                 return Err(
                     "The JAR does not contain a matching Forge/NeoForge mod descriptor".into(),
@@ -596,6 +596,17 @@ mod tests {
             .unwrap();
         archive.write_all(data.as_bytes()).unwrap();
         archive.finish().unwrap();
+    }
+    #[test]
+    fn distinguishes_modern_forge_and_neoforge_descriptors() {
+        let root=temp();let file=root.join("mod.jar");
+        jar(&file,"META-INF/mods.toml","modLoader=\"javafml\"");
+        assert!(validate_jar(&file,Software::Forge,"1.21.1",None).is_ok());
+        assert!(validate_jar(&file,Software::Neoforge,"1.21.1",None).is_err());
+        assert!(validate_jar(&file,Software::Neoforge,"1.20.2",None).is_ok());
+        jar(&file,"META-INF/neoforge.mods.toml","modLoader=\"javafml\"");
+        assert!(validate_jar(&file,Software::Neoforge,"1.21.1",None).is_ok());
+        assert!(validate_jar(&file,Software::Paper,"1.21.1",None).is_err());
     }
     #[test]
     fn rejects_unsafe_names_and_wrong_loaders() {

@@ -270,8 +270,9 @@ pub async fn install_pack(
         let path = stage.0.join(&file.path);
         std::fs::create_dir_all(path.parent().ok_or("Missing parent")?).map_err(error)?;
         runtime::download(url, hash, &path, &|e| {
+            let phase=if e.phase==runtime::DownloadPhase::Complete {runtime::DownloadPhase::Verifying}else{e.phase};
             report(runtime::DownloadProgress::new(
-                e.phase,
+                phase,
                 done + e.downloaded,
                 Some(total),
             ))
@@ -290,8 +291,8 @@ pub async fn install_pack(
     let paths = archive::tree(&stage.0)?;
     for path in &paths {
         destination(path)?;
-        if path.starts_with("mods/") {
-            if !path.ends_with(".jar") {
+        if path.to_ascii_lowercase().starts_with("mods/") {
+            if !path.to_ascii_lowercase().ends_with(".jar") {
                 return Err("Only JARs may be installed in mods".into());
             }
             let loader = if server.software == Software::Fabric {

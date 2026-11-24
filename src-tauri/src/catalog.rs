@@ -79,6 +79,7 @@ async fn image(url: &str) -> Result<String> {
     }
     let mut response = runtime::client()?
         .get(url)
+        .timeout(std::time::Duration::from_secs(20))
         .send()
         .await
         .map_err(error)?
@@ -105,3 +106,4 @@ async fn image(url: &str) -> Result<String> {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
 }
+#[cfg(test)]mod tests{use super::*;#[tokio::test]#[ignore="Official Modrinth catalogue and gallery, GitHub Actions only"]async fn catalog_contract(){assert!(!catalog_categories().await.unwrap().is_empty());let details=catalog_details("chunky".into()).await.unwrap();assert!(!details.title.is_empty()&&!details.body.is_empty());for item in details.gallery{assert!(item.image.starts_with("data:image/"));}assert!(image("https://example.com/image.svg").await.is_err());}}
