@@ -210,7 +210,10 @@ fn minecraft_matches(requirement: &str, game: &str) -> Result<bool> {
             .split_whitespace()
             // Fabric's empty prerelease sorts below the stable release. Only stable
             // Minecraft versions are offered, so semver's -0 has the same boundary.
-            .map(|part| part.strip_suffix('-').map_or_else(|| part.to_string(), |base| format!("{base}-0")))
+            .map(|part| {
+                part.strip_suffix('-')
+                    .map_or_else(|| part.to_string(), |base| format!("{base}-0"))
+            })
             .collect::<Vec<_>>()
             .join(", ");
         if semver::VersionReq::parse(&req)

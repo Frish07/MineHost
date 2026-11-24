@@ -102,10 +102,7 @@ pub async fn search(
         categories,
         // API v2 version-specific searches still use the legacy server-side facet.
         // Its environment facet omits older versions of otherwise server-compatible projects.
-        vec![
-            "server_side:required".into(),
-            "server_side:optional".into(),
-        ],
+        vec!["server_side:required".into(), "server_side:optional".into()],
     ])
     .map_err(error)?;
     let url = query_url(
