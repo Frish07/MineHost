@@ -12,6 +12,8 @@ Network access initiated by MineHost follows explicit user actions:
 
 MineHost does not currently implement Google Drive, external tunnels or cloud backup uploads. Windows WebView2 and Windows security/update services are Microsoft components with their own privacy behavior.
 
+The file/world managers operate locally. World archives are not uploaded. The player manager reads Minecraft's local lists and sends administrative commands to the local Java process. Minecraft may contact its account services when resolving player names. The online list is a manual snapshot, not telemetry; MineHost does not send player lists to its developer.
+
 Provider information: [PaperMC](https://papermc.io/), [Eclipse Foundation privacy](https://www.eclipse.org/legal/privacy.php), [GitHub privacy](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement), [Microsoft privacy](https://privacy.microsoft.com/privacystatement). No API-specific privacy-policy URL for the PaperMC download service has been verified; the MineHost request behavior is described above.
 
 The optional code-signing pipeline transfers public build artifacts and build provenance from GitHub Actions to SignPath. This happens on GitHub runners; no end-user server directories, logs or personal Minecraft data are submitted. See [SignPath privacy](https://signpath.io/privacy-policy).

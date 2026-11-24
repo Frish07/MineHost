@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "Only local main window events. No frontend shell or filesystem access.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "dialog:allow-open"]
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "dialog:allow-open", "dialog:allow-save"]
 }

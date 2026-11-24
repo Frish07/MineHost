@@ -1,0 +1,26 @@
+import {useCallback, useEffect, useState} from 'react';
+import {invoke} from '@tauri-apps/api/core';
+type Props={id:string;language:'ru'|'en';locked:boolean;running:boolean;act:(task:()=>Promise<unknown>)=>Promise<void>};
+type Entry={name:string;directory:boolean;size:number;editable:boolean};
+type Document={content:string;revision:string};
+export function FilesPanel({id,language,locked,running,act}:Props){
+  const ru=language==='ru';
+  const [path,setPath]=useState('');const [entries,setEntries]=useState<Entry[]>([]);
+  const [file,setFile]=useState('');const [document,setDocument]=useState<Document|null>(null);const [text,setText]=useState('');const [error,setError]=useState('');
+  const join=(name:string)=>path?`${path}/${name}`:name;
+  const refresh=useCallback(async()=>{setEntries(await invoke<Entry[]>('list_files',{id,relative:path}));setError('');},[id,path]);
+  useEffect(()=>{let cancelled=false;void invoke<Entry[]>('list_files',{id,relative:path}).then(rows=>{if(!cancelled){setEntries(rows);setError('');}}).catch(e=>{if(!cancelled)setError(String(e));});return()=>{cancelled=true;};},[id,path]);
+  const discard=()=>!document||text===document.content||window.confirm(ru?'Отбросить несохранённые изменения?':'Discard unsaved changes?');
+  const open=(relative:string)=>{if(!discard())return;void act(async()=>{const value=await invoke<Document>('read_file',{id,relative});setFile(relative);setDocument(value);setText(value.content);});};
+  const go=(relative:string)=>{if(discard()){setPath(relative);setFile('');setDocument(null);}};
+  const operation=(task:()=>Promise<unknown>)=>{void act(async()=>{await task();await refresh();});};
+  const create=(folder:boolean)=>{const name=window.prompt(folder?(ru?'Название папки':'Directory name'):(ru?'Имя текстового файла с расширением':'Text filename including extension'));if(!name)return;
+    operation(async()=>{const relative=join(name);if(folder)await invoke('file_action',{id,relative,action:'mkdir',target:''});else{await invoke('save_file',{id,relative,content:'',revision:null});const value=await invoke<Document>('read_file',{id,relative});setFile(relative);setDocument(value);setText(value.content);}});
+  };
+  return <section className="panel manager-panel"><h2>{ru?'Файлы сервера':'Server files'}</h2><p className="muted">{ru?'Изменения доступны после остановки сервера. Редактор: UTF-8 до 1 МиБ; перед сохранением создаётся копия. JAR управляйте в разделе дополнений. Сохраните текст перед переходом в другой раздел.':'Stop the server before making changes. UTF-8 editor, up to 1 MiB; previous files are backed up. Manage JARs in Addons. Save edits before leaving this section.'}</p>
+    <div className="button-row"><button disabled={locked||!path} onClick={()=>go(path.includes('/')?path.slice(0,path.lastIndexOf('/')):'')}>↑ {ru?'Выше':'Up'}</button><button disabled={locked} onClick={()=>void act(refresh)}>{ru?'Обновить':'Refresh'}</button><button disabled={locked||running} onClick={()=>{if(discard())create(true);}}>＋ {ru?'Папка':'Directory'}</button><button disabled={locked||running} onClick={()=>{if(discard())create(false);}}>＋ {ru?'Файл':'File'}</button></div><p className="path-label">/{path}</p>
+    {error&&<p role="alert" className="addon-error">{error}</p>}
+    <div className="file-list">{!entries.length&&<p className="muted">{ru?'Папка пуста':'Empty directory'}</p>}{entries.map(entry=><div className="file-row" key={entry.name}><button className="file-name" disabled={locked||(!entry.directory&&!entry.editable)} onClick={()=>entry.directory?go(join(entry.name)):open(join(entry.name))}>{entry.directory?'▣':'▤'} {entry.name}</button><small>{entry.directory?'—':`${(entry.size/1024).toFixed(1)} KiB`}</small>{entry.editable&&<><button disabled={locked||running||entry.name.toLowerCase()==='eula.txt'} onClick={()=>{if(!discard())return;const name=window.prompt(ru?'Новое имя файла':'New filename',entry.name);if(name)operation(async()=>{await invoke('file_action',{id,relative:join(entry.name),action:'rename',target:name});setDocument(null);setFile('');});}}>{ru?'Имя':'Rename'}</button><button className="danger" disabled={locked||running||entry.name.toLowerCase()==='eula.txt'} onClick={()=>{if(!discard()||!window.confirm(`${ru?'Перенести файл в корзину MineHost?':'Move file to MineHost trash?'}\n${join(entry.name)}`))return;operation(async()=>{await invoke('file_action',{id,relative:join(entry.name),action:'trash',target:join(entry.name)});setDocument(null);setFile('');});}}>{ru?'Убрать':'Remove'}</button></>}</div>)}</div>
+    {document&&<div className="file-editor"><h3>{file}</h3><textarea spellCheck={false} aria-label={file} value={text} disabled={locked||running||file.toLowerCase()==='eula.txt'} onChange={e=>setText(e.target.value)}/><div className="button-row"><button className="primary" disabled={locked||running||file.toLowerCase()==='eula.txt'||text===document.content} onClick={()=>operation(async()=>{await invoke('save_file',{id,relative:file,content:text,revision:document.revision});const value=await invoke<Document>('read_file',{id,relative:file});setDocument(value);setText(value.content);})}>{ru?'Сохранить с резервной копией':'Save with backup'}</button><button disabled={locked} onClick={()=>open(file)}>{ru?'Перечитать':'Reload'}</button></div></div>}
+  </section>;
+}

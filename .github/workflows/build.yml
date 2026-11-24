@@ -68,8 +68,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: windows-x64-rust-
+          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}-
+            windows-x64-rust-
       - name: Verify Tauri Windows prerequisites supplied by windows-latest
         shell: pwsh
         run: |
@@ -271,4 +273,4 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          key: windows-x64-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}-${{ github.sha }}

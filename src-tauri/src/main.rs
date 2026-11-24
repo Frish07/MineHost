@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod addons;
+mod files;
 mod modrinth;
+mod players;
 mod runtime;
 mod safety;
 mod software;
+mod worlds;
 
 use runtime::Runtime;
 use serde::{Deserialize, Serialize};
@@ -49,6 +52,8 @@ struct ServerView {
 struct Running {
     input: Arc<Mutex<ChildStdin>>,
     ram: u32,
+    player_query: Option<uuid::Uuid>,
+    players: Option<Vec<String>>,
 }
 
 struct Inner {
@@ -109,6 +114,14 @@ fn begin(shared: &Shared, id: &str) -> Result<Operation> {
         shared: shared.clone(),
         id: id.into(),
     })
+}
+
+async fn profile_task<T: Send + 'static>(shared: Shared, id: String, stopped: bool, task: impl FnOnce(Server, PathBuf) -> Result<T> + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = if stopped {Some(begin(&shared,&id)?)} else {None};
+        let (server,root)=profile_path(&shared,&id)?;
+        task(server,root)
+    }).await.map_err(error)?
 }
 
 #[tauri::command]
@@ -272,6 +285,11 @@ struct LogEvent {
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
+        if let Some(running)=inner.running.get_mut(id) {
+            if running.player_query.is_some() {
+                if let Some(names)=players::online_line(&line) {running.players=Some(names);}
+            }
+        }
         let logs = inner.logs.entry(id.into()).or_default();
         if logs.len() >= LOG_LIMIT {
             logs.pop_front();
@@ -363,6 +381,8 @@ fn start_server(
         Running {
             input: Arc::new(Mutex::new(input)),
             ram: server.ram_mb,
+            player_query: None,
+            players: None,
         },
     );
     inner.logs.insert(id.clone(), VecDeque::new());
@@ -437,6 +457,7 @@ fn save_properties(state: State<'_, Shared>, id: String, content: String) -> Res
     safety::properties(&content, server.port)?;
     let file = directory(&inner, &id)?.join("server.properties");
     safety::reject_links(&file)?;
+    safety::reject_links(&file.with_extension("properties.bak"))?;
     std::fs::copy(&file, file.with_extension("properties.bak")).map_err(error)?;
     safety::atomic_write(&file, content.as_bytes())
 }
@@ -703,7 +724,7 @@ fn main() {
         db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);")?;
         app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new() })));
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server])
+    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
