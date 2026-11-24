@@ -363,19 +363,56 @@ mod tests {
     #[test]
     fn respects_server_override_priority_and_exact_loader_dependencies() {
         use std::io::Write;
-        let root=archive::Stage::new(&std::env::temp_dir()).unwrap();
-        let source=root.0.join("test.mrpack");
-        let index=serde_json::json!({"formatVersion":1,"game":"minecraft","name":"Test","versionId":"1","dependencies":{"minecraft":"1.21.1","fabric-loader":"0.18.4"},"files":[{"path":"mods/client.jar","fileSize":1,"hashes":{},"downloads":[],"env":{"server":"unsupported","client":"required"}}]});
-        let mut writer=zip::ZipWriter::new(std::fs::File::create(&source).unwrap());
-        for (name,bytes) in [("modrinth.index.json",index.to_string()),("overrides/config/test.toml","common = true".into()),("server-overrides/config/test.toml","server = true".into()),("client-overrides/config/test.toml","client = true".into())] {
-            writer.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();writer.write_all(bytes.as_bytes()).unwrap();
+        let root = archive::Stage::new(&std::env::temp_dir()).unwrap();
+        let source = root.0.join("test.mrpack");
+        let index = serde_json::json!({"formatVersion":1,"game":"minecraft","name":"Test","versionId":"1","dependencies":{"minecraft":"1.21.1","fabric-loader":"0.18.4"},"files":[{"path":"mods/client.jar","fileSize":1,"hashes":{},"downloads":[],"env":{"server":"unsupported","client":"required"}}]});
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&source).unwrap());
+        for (name, bytes) in [
+            ("modrinth.index.json", index.to_string()),
+            ("overrides/config/test.toml", "common = true".into()),
+            ("server-overrides/config/test.toml", "server = true".into()),
+            ("client-overrides/config/test.toml", "client = true".into()),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes.as_bytes()).unwrap();
         }
-        writer.finish().unwrap();assert!(preview(&source).unwrap().files.is_empty());
-        std::fs::create_dir_all(root.0.join(".minehost")).unwrap();std::fs::write(root.0.join(".minehost/software.json"),r#"{"fabricLoader":"0.18.4"}"#).unwrap();
-        let mut server=Server{id:uuid::Uuid::new_v4().to_string(),name:"Test".into(),version:"1.21.1".into(),port:25565,ram_mb:2048,eula:false,installed:true,java_major:21,software:Software::Fabric,loader_version:None};
-        let pack=self::index(&source).unwrap();compatibility(&pack,&server,&root.0).unwrap();server.version="1.21.2".into();assert!(compatibility(&pack,&server,&root.0).is_err());
-        let stage=archive::Stage::new(&std::env::temp_dir()).unwrap();overrides(&source,&stage.0).unwrap();assert_eq!(std::fs::read_to_string(stage.0.join("config/test.toml")).unwrap(),"server = true");
-        archive::overlay(&root.0,&stage.0,&archive::tree(&stage.0).unwrap()).unwrap();assert_eq!(std::fs::read_to_string(root.0.join("config/test.toml")).unwrap(),"server = true");
+        writer.finish().unwrap();
+        assert!(preview(&source).unwrap().files.is_empty());
+        std::fs::create_dir_all(root.0.join(".minehost")).unwrap();
+        std::fs::write(
+            root.0.join(".minehost/software.json"),
+            r#"{"fabricLoader":"0.18.4"}"#,
+        )
+        .unwrap();
+        let mut server = Server {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Test".into(),
+            version: "1.21.1".into(),
+            port: 25565,
+            ram_mb: 2048,
+            eula: false,
+            installed: true,
+            java_major: 21,
+            software: Software::Fabric,
+            loader_version: None,
+        };
+        let pack = self::index(&source).unwrap();
+        compatibility(&pack, &server, &root.0).unwrap();
+        server.version = "1.21.2".into();
+        assert!(compatibility(&pack, &server, &root.0).is_err());
+        let stage = archive::Stage::new(&std::env::temp_dir()).unwrap();
+        overrides(&source, &stage.0).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(stage.0.join("config/test.toml")).unwrap(),
+            "server = true"
+        );
+        archive::overlay(&root.0, &stage.0, &archive::tree(&stage.0).unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.0.join("config/test.toml")).unwrap(),
+            "server = true"
+        );
     }
     #[test]
     fn prevents_bootstrap_and_profile_overrides() {
