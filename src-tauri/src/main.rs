@@ -3,6 +3,9 @@
 mod addons;
 mod archive;
 mod backups;
+mod backup_schedule;
+mod drive;
+mod drive_auth;
 mod catalog;
 mod dimensions;
 mod files;
@@ -78,6 +81,7 @@ struct Inner {
     logs: HashMap<String, VecDeque<String>>,
     agent: Option<playit::ManagedAgent>,
     claim: Option<playit::Claim>,
+    drive: drive::Session,
 }
 
 struct Operation {
@@ -752,6 +756,7 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     transaction
         .execute("DELETE FROM network_settings WHERE server_id=?1", [&id])
         .map_err(error)?;
+    transaction.execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id]).map_err(error)?;
     transaction.commit().map_err(error)?;
     Ok(())
 }
@@ -798,9 +803,11 @@ fn main() {
         db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS servers(id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,data TEXT NOT NULL);")?;
         db.execute_batch(history::SCHEMA)?;
         db.execute_batch(network::SCHEMA)?;
-        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None })));
+        db.execute_batch(backup_schedule::SCHEMA)?;
+        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None, drive: drive::Session::default() })));
+        backup_schedule::start(app.state::<Shared>().inner());
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
+    }).invoke_handler(tauri::generate_handler![drive::drive_help, drive::drive_status, drive::drive_cancel, drive::drive_configure, drive::drive_connect, drive::drive_disconnect, drive::drive_discard, drive::drive_list, drive::drive_upload, drive::drive_resume, drive::drive_download, drive::drive_trash, backup_schedule::backup_schedule, backup_schedule::save_backup_schedule, list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -851,6 +858,7 @@ mod tests {
             logs: HashMap::new(),
             agent: None,
             claim: None,
+            drive: drive::Session::default(),
         };
         save(&inner, &server).unwrap();
         Arc::new(Mutex::new(inner))

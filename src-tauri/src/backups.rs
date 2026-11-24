@@ -21,7 +21,7 @@ pub struct Preview {
     software: Option<String>,
     minecraft: Option<String>,
 }
-fn source(root: &Path, id: &str, name: &str) -> Result<PathBuf> {
+pub(crate) fn source(root: &Path, id: &str, name: &str) -> Result<PathBuf> {
     files::name(name)?;
     if !name.starts_with(&format!("{id}-")) || !name.ends_with(".zip") {
         return Err("Backup does not belong to this profile".into());
@@ -81,7 +81,7 @@ fn metadata(zip: &mut zip::ZipArchive<std::fs::File>) -> Result<Option<Server>> 
         Err(e) => Err(error(e)),
     }
 }
-fn preview(path: &Path) -> Result<Preview> {
+pub(crate) fn preview(path: &Path) -> Result<Preview> {
     let mut zip = archive::open(path)?;
     let entries = archive::entries(&mut zip)?;
     let profile = metadata(&mut zip)?;
@@ -301,8 +301,20 @@ pub async fn import_backup(state: State<'_, Shared>, id: String, source: String)
             let inner = crate::lock(&shared)?;
             (crate::load(&inner, &id)?, inner.root.clone())
         };
-        let source = PathBuf::from(source);
-        let mut zip = archive::open(&source)?;
+        import_local(&root, &server, Path::new(&source))
+    })
+    .await
+    .map_err(error)?
+}
+pub trait BackupProvider {
+    fn store(&self, source: &Path) -> Result<String>;
+}
+pub struct LocalBackupProvider<'a> { pub root: &'a Path, pub server: &'a Server }
+impl BackupProvider for LocalBackupProvider<'_> {
+    fn store(&self, source: &Path) -> Result<String> { import_local(self.root, self.server, source) }
+}
+pub fn import_local(root: &Path, server: &Server, source: &Path) -> Result<String> {
+        let mut zip = archive::open(source)?;
         archive::entries(&mut zip)?;
         if let Some(saved) = metadata(&mut zip)? {
             if saved.software != server.software || saved.version != server.version {
@@ -315,7 +327,7 @@ pub async fn import_backup(state: State<'_, Shared>, id: String, source: String)
         let folder = root.join("backups");
         safety::reject_links(&folder)?;
         std::fs::create_dir_all(&folder).map_err(error)?;
-        let name = format!("{}-{}.zip", id, uuid::Uuid::new_v4());
+        let name = format!("{}-{}.zip", server.id, uuid::Uuid::new_v4());
         let target = folder.join(&name);
         let result = (|| {
             let mut output = std::fs::OpenOptions::new()
@@ -323,7 +335,7 @@ pub async fn import_backup(state: State<'_, Shared>, id: String, source: String)
                 .create_new(true)
                 .open(&target)
                 .map_err(error)?;
-            let input = std::fs::File::open(&source).map_err(error)?;
+            let input = std::fs::File::open(source).map_err(error)?;
             let size =
                 std::io::copy(&mut input.take(archive::LIMIT + 1), &mut output).map_err(error)?;
             if size > archive::LIMIT {
@@ -338,9 +350,6 @@ pub async fn import_backup(state: State<'_, Shared>, id: String, source: String)
             let _ = std::fs::remove_file(&target);
         }
         result
-    })
-    .await
-    .map_err(error)?
 }
 #[cfg(test)]
 mod tests {

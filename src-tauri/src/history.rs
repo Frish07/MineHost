@@ -100,6 +100,7 @@ mod tests {
             logs: Default::default(),
             agent: None,
             claim: None,
+            drive: Default::default(),
         };
         insert(&inner, "server", "session", "Steve", "leave").unwrap();
         drop(inner);
