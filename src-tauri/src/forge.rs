@@ -312,6 +312,9 @@ mod tests {
                 .unwrap()
                 .contains(&game.to_string()));
             let stage = archive::Stage::new(&std::env::temp_dir()).unwrap();
+            for folder in ["cache", "runtimes"] {
+                std::fs::create_dir(stage.0.join(folder)).unwrap();
+            }
             let java = runtime::install_java(&stage.0, 21).await.unwrap();
             let root = stage.0.join("server");
             std::fs::create_dir(&root).unwrap();

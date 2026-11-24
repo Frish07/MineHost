@@ -61,6 +61,7 @@ fn transfer(
     let parent = target.parent().ok_or("Missing dimension parent")?;
     safety::reject_links(parent)?;
     std::fs::create_dir_all(parent).map_err(error)?;
+    safety::reject_links(&parent.join("level.dat"))?;
     if matches!(to.software, Software::Paper | Software::Purpur)
         && !parent.join("level.dat").exists()
     {

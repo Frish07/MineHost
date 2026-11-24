@@ -86,6 +86,18 @@ pub fn connection_history(state: State<'_, Shared>, id: String, offset: u32) -> 
 mod tests {
     use super::*;
     #[test]
+    fn stores_events_across_database_reopen_and_bounds_history() {
+        let stage=crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        let path=stage.0.join("history.sqlite");
+        let db=rusqlite::Connection::open(&path).unwrap();db.execute_batch(SCHEMA).unwrap();
+        db.execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10001) INSERT INTO connection_history(server_id,session,player,kind,at) SELECT 'server','session','Steve','join',x FROM n;").unwrap();
+        let inner=crate::Inner{db,root:stage.0.clone(),running:Default::default(),busy:Default::default(),logs:Default::default()};
+        insert(&inner,"server","session","Steve","leave").unwrap();drop(inner);
+        let db=rusqlite::Connection::open(&path).unwrap();
+        let count:i64=db.query_row("SELECT COUNT(*) FROM connection_history",[],|r|r.get(0)).unwrap();assert_eq!(count,10000);
+        let kind:String=db.query_row("SELECT kind FROM connection_history ORDER BY event_id DESC LIMIT 1",[],|r|r.get(0)).unwrap();assert_eq!(kind,"leave");
+    }
+    #[test]
     fn ignores_chat_and_localized_non_events() {
         assert_eq!(
             parse("[Server thread/INFO]: Steve joined the game"),
