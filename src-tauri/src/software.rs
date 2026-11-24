@@ -18,7 +18,9 @@ pub enum Software {
 
 impl Software {
     pub fn launcher(self) -> &'static str {
-        if matches!(self, Self::Forge | Self::Neoforge) {return ".minehost/forge.json";}
+        if matches!(self, Self::Forge | Self::Neoforge) {
+            return ".minehost/forge.json";
+        }
         if self == Self::Fabric {
             "fabric-launcher.jar"
         } else {
@@ -26,7 +28,11 @@ impl Software {
         }
     }
     pub fn addon_directory(self) -> Result<&'static str> {
-        match self { Self::Paper | Self::Purpur => Ok("plugins"), Self::Fabric | Self::Forge | Self::Neoforge => Ok("mods"), Self::Vanilla => Err("Vanilla does not support mods or plugins.".into()) }
+        match self {
+            Self::Paper | Self::Purpur => Ok("plugins"),
+            Self::Fabric | Self::Forge | Self::Neoforge => Ok("mods"),
+            Self::Vanilla => Err("Vanilla does not support mods or plugins.".into()),
+        }
     }
     pub fn loaders(self) -> &'static [&'static str] {
         match self {
@@ -88,9 +94,16 @@ impl Software {
         directory: &Path,
         progress: &(dyn Fn(DownloadProgress) + Send + Sync),
     ) -> Result<u32> {
-        self.install_pinned(version,directory,None,progress).await
+        self.install_pinned(version, directory, None, progress)
+            .await
     }
-    pub async fn install_pinned(self,version:&str,directory:&Path,pinned:Option<&str>,progress:&(dyn Fn(DownloadProgress)+Send+Sync))->Result<u32>{
+    pub async fn install_pinned(
+        self,
+        version: &str,
+        directory: &Path,
+        pinned: Option<&str>,
+        progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+    ) -> Result<u32> {
         if self == Self::Paper {
             return runtime::install_paper(version, directory, progress).await;
         }
@@ -138,7 +151,12 @@ impl Software {
                     .as_array()
                     .ok_or("Missing Fabric loaders")?
                     .iter()
-                    .find(|v| v["loader"]["stable"] == true && pinned.filter(|v|!v.is_empty()).is_none_or(|p|v["loader"]["version"]==p))
+                    .find(|v| {
+                        v["loader"]["stable"] == true
+                            && pinned
+                                .filter(|v| !v.is_empty())
+                                .is_none_or(|p| v["loader"]["version"] == p)
+                    })
                     .ok_or("No stable Fabric loader for this Minecraft version")?;
                 let loader = text(&loader["loader"], "version")?;
                 safety::version(loader)?;
@@ -155,7 +173,11 @@ impl Software {
                 (format!("https://meta.fabricmc.net/v2/versions/loader/{version}/{loader}/{installer}/server/jar"), String::new(), Some(loader.to_string()))
             }
             Self::Paper => unreachable!(),
-            Self::Forge | Self::Neoforge => return Err("Use the official installer with an explicitly selected Java runtime".into()),
+            Self::Forge | Self::Neoforge => {
+                return Err(
+                    "Use the official installer with an explicitly selected Java runtime".into(),
+                )
+            }
         };
         runtime::download(&url, &checksum, &directory.join(self.launcher()), progress).await?;
         if let Some(loader) = fabric_loader {
@@ -190,7 +212,17 @@ async fn minecraft_version(version: &str) -> Result<Value> {
         .ok_or("Not an official released Minecraft version")?;
     runtime::get_verified_json(text(entry, "url")?, Some(text(entry, "sha1")?)).await
 }
-pub async fn required_java(version:&str)->Result<u32>{let metadata=minecraft_version(version).await?;let major=metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64).unwrap_or(8);if !(8..=50).contains(&major){return Err("Unsupported Java version".into());}Ok(major as u32)}
+pub async fn required_java(version: &str) -> Result<u32> {
+    let metadata = minecraft_version(version).await?;
+    let major = metadata
+        .pointer("/javaVersion/majorVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(8);
+    if !(8..=50).contains(&major) {
+        return Err("Unsupported Java version".into());
+    }
+    Ok(major as u32)
+}
 
 #[cfg(test)]
 mod tests {

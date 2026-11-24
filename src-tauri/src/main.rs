@@ -5,11 +5,11 @@ mod archive;
 mod backups;
 mod catalog;
 mod dimensions;
+mod files;
 mod forge;
 mod history;
-mod files;
-mod modrinth;
 mod modpacks;
+mod modrinth;
 mod players;
 mod runtime;
 mod safety;
@@ -181,11 +181,13 @@ async fn create_server(
         return Err("Name must contain 1–80 printable characters".into());
     }
     safety::version(&version)?;
-    if let Some(loader)=loader_version.as_ref().filter(|v|!v.is_empty()){safety::version(loader)?;}
+    if let Some(loader) = loader_version.as_ref().filter(|v| !v.is_empty()) {
+        safety::version(loader)?;
+    }
     if port < 1024 || !(512..=RAM_BUDGET).contains(&ram_mb) {
         return Err("Port must be 1024–65535; RAM 512–12288 MiB".into());
     }
-    let java_major=software::required_java(&version).await?;
+    let java_major = software::required_java(&version).await?;
     let inner = lock(&state)?;
     let server = Server {
         id: uuid::Uuid::new_v4().to_string(),
@@ -230,21 +232,43 @@ async fn install_software(
     let report = |progress| {
         let _ = on_progress.send(progress);
     };
-    let (major,size) = if matches!(server.software,software::Software::Forge|software::Software::Neoforge) {
-        if !installer_consent {return Err("Explicit permission to execute the official Minecraft loader installer is required".into());}
-        let major=software::required_java(&server.version).await?;
-        let root={lock(&state)?.root.clone()};
-        let java=runtime::detect_java(&root,major,&custom_path).map_err(|e|format!("First detect or download Java {major} in Server & Java. {e}"))?;
-        let size=forge::install(server.software,&server.version,server.loader_version.as_deref(),&dir,Path::new(&java.path),&report).await?;
-        (major,size)
-    } else {let major=server
-        .software
-        .install_pinned(&server.version, &dir, server.loader_version.as_deref(), &report)
-        .await
-        .map_err(|e| format!("{:?} {}: {e}", server.software, server.version))?;
-    let size = std::fs::metadata(dir.join(server.software.launcher()))
-        .map_err(error)?
-        .len(); (major,size)};
+    let (major, size) = if matches!(
+        server.software,
+        software::Software::Forge | software::Software::Neoforge
+    ) {
+        if !installer_consent {
+            return Err("Explicit permission to execute the official Minecraft loader installer is required".into());
+        }
+        let major = software::required_java(&server.version).await?;
+        let root = { lock(&state)?.root.clone() };
+        let java = runtime::detect_java(&root, major, &custom_path)
+            .map_err(|e| format!("First detect or download Java {major} in Server & Java. {e}"))?;
+        let size = forge::install(
+            server.software,
+            &server.version,
+            server.loader_version.as_deref(),
+            &dir,
+            Path::new(&java.path),
+            &report,
+        )
+        .await?;
+        (major, size)
+    } else {
+        let major = server
+            .software
+            .install_pinned(
+                &server.version,
+                &dir,
+                server.loader_version.as_deref(),
+                &report,
+            )
+            .await
+            .map_err(|e| format!("{:?} {}: {e}", server.software, server.version))?;
+        let size = std::fs::metadata(dir.join(server.software.launcher()))
+            .map_err(error)?
+            .len();
+        (major, size)
+    };
     finish_paper_install(operation, major)?;
     let _ = on_progress.send(runtime::DownloadProgress::new(
         runtime::DownloadPhase::Complete,
@@ -283,7 +307,11 @@ async fn java_status(state: State<'_, Shared>, id: String, custom_path: String) 
         let inner = lock(&state)?;
         (load(&inner, &id)?, inner.root.clone())
     };
-    let major=if server.installed {server.java_major}else{software::required_java(&server.version).await?};
+    let major = if server.installed {
+        server.java_major
+    } else {
+        software::required_java(&server.version).await?
+    };
     runtime::detect_java(&root, major, &custom_path)
 }
 
@@ -321,7 +349,9 @@ struct LogEvent {
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
-        if let Err(e)=history::record(&mut inner,id,&line){eprintln!("Connection history: {e}");}
+        if let Err(e) = history::record(&mut inner, id, &line) {
+            eprintln!("Connection history: {e}");
+        }
         if let Some(running) = inner.running.get_mut(id) {
             if running.player_query.is_some() {
                 if let Some(names) = players::online_line(&line) {
@@ -399,8 +429,19 @@ fn start_server(
     let port_probe = std::net::TcpListener::bind(("0.0.0.0", server.port))
         .map_err(|e| format!("Port unavailable: {e}"))?;
     let mut command = Command::new(java.path);
-    command.args(["-Xms256M", &format!("-Xmx{}M",server.ram_mb)]);
-    if matches!(server.software,software::Software::Forge|software::Software::Neoforge) {command.args(forge::launch_arguments(&dir,server.software,&server.version)?);}else{command.args(["-jar",server.software.launcher(),"nogui"]);}
+    command.args(["-Xms256M", &format!("-Xmx{}M", server.ram_mb)]);
+    if matches!(
+        server.software,
+        software::Software::Forge | software::Software::Neoforge
+    ) {
+        command.args(forge::launch_arguments(
+            &dir,
+            server.software,
+            &server.version,
+        )?);
+    } else {
+        command.args(["-jar", server.software.launcher(), "nogui"]);
+    }
     command
         .current_dir(&dir)
         .stdin(Stdio::piped())
@@ -433,7 +474,9 @@ fn start_server(
     std::thread::spawn(move || {
         let result = child.wait();
         if let Ok(mut inner) = shared.lock() {
-            if let Err(e)=history::end(&inner,&id){eprintln!("Connection history: {e}");}
+            if let Err(e) = history::end(&inner, &id) {
+                eprintln!("Connection history: {e}");
+            }
             inner.running.remove(&id);
         }
         append_log(
@@ -560,7 +603,15 @@ async fn search_addons(
     category: Option<String>,
 ) -> Result<modrinth::SearchResult> {
     let (server, _) = profile_path(&state, &id)?;
-    modrinth::search(server.software, &server.version, &query, offset, &sort, category.as_deref()).await
+    modrinth::search(
+        server.software,
+        &server.version,
+        &query,
+        offset,
+        &sort,
+        category.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -685,12 +736,23 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
 
 #[tauri::command]
 async fn backup_server(state: State<'_, Shared>, id: String) -> Result<String> {
-    let shared=state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move||{
-        let _operation=begin(&shared,&id)?;
-        let (server,root,dir)={let inner=lock(&shared)?;(load(&inner,&id)?,inner.root.clone(),directory(&inner,&id)?)};
-        Ok(backups::create(&root,&server,&dir)?.to_string_lossy().into_owned())
-    }).await.map_err(error)?
+    let shared = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = begin(&shared, &id)?;
+        let (server, root, dir) = {
+            let inner = lock(&shared)?;
+            (
+                load(&inner, &id)?,
+                inner.root.clone(),
+                directory(&inner, &id)?,
+            )
+        };
+        Ok(backups::create(&root, &server, &dir)?
+            .to_string_lossy()
+            .into_owned())
+    })
+    .await
+    .map_err(error)?
 }
 fn main() {
     let app = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).setup(|app| {

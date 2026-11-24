@@ -306,9 +306,17 @@ pub fn validate_jar(
             }
         }
         Software::Forge | Software::Neoforge => {
-            let descriptor = if software == Software::Neoforge {"META-INF/neoforge.mods.toml"} else {"META-INF/mods.toml"};
-            if jar.by_name(descriptor).is_err() && !(software == Software::Neoforge && jar.by_name("META-INF/mods.toml").is_ok()) {
-                return Err("The JAR does not contain a matching Forge/NeoForge mod descriptor".into());
+            let descriptor = if software == Software::Neoforge {
+                "META-INF/neoforge.mods.toml"
+            } else {
+                "META-INF/mods.toml"
+            };
+            if jar.by_name(descriptor).is_err()
+                && !(software == Software::Neoforge && jar.by_name("META-INF/mods.toml").is_ok())
+            {
+                return Err(
+                    "The JAR does not contain a matching Forge/NeoForge mod descriptor".into(),
+                );
             }
         }
         Software::Vanilla => {
