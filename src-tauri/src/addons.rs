@@ -579,7 +579,17 @@ mod tests {
     }
     #[test]
     fn rejects_unsafe_names_and_wrong_loaders() {
-        for name in ["../x.jar", "x/y.jar", "CON.jar", "CONIN$.jar", "COM¹.jar", "LPT².jar", " x.jar", "x.jar:stream", "a\\b.jar"] {
+        for name in [
+            "../x.jar",
+            "x/y.jar",
+            "CON.jar",
+            "CONIN$.jar",
+            "COM¹.jar",
+            "LPT².jar",
+            " x.jar",
+            "x.jar:stream",
+            "a\\b.jar",
+        ] {
             assert!(jar_filename(name).is_err());
         }
         let root = temp();
@@ -594,7 +604,11 @@ mod tests {
         assert!(validate_jar(&file, Software::Fabric, "1.20.1", None).is_err());
         jar(&file, "fabric.mod.json", r#"{"environment":"client"}"#);
         assert!(validate_jar(&file, Software::Fabric, "1.21.11", None).is_err());
-        jar(&file, "fabric.mod.json", r#"{"environment":"*","depends":{"fabricloader":">=0.18.0"}}"#);
+        jar(
+            &file,
+            "fabric.mod.json",
+            r#"{"environment":"*","depends":{"fabricloader":">=0.18.0"}}"#,
+        );
         assert!(validate_jar(&file, Software::Fabric, "1.21.11", None).is_err());
         assert!(validate_jar(&file, Software::Fabric, "1.21.11", Some("0.20.1")).is_ok());
         assert!(validate_jar(&file, Software::Fabric, "1.21.11", Some("0.17.0")).is_err());
@@ -688,11 +702,30 @@ mod tests {
             .unwrap();
         assert_eq!(installed(&root, software).unwrap().len(), 1);
         let fabric = temp();
-        Software::Fabric.install("1.21.11", &fabric, &|_| {}).await.unwrap();
-        let versions = crate::modrinth::versions("fabric-api", Software::Fabric, "1.21.11").await.unwrap();
-        let items = crate::modrinth::plan(&versions[0].id, Software::Fabric, "1.21.11", &[]).await.unwrap();
-        let approved = items.iter().map(|v| v.version_id.clone()).collect::<Vec<_>>();
-        install(&fabric, Software::Fabric, "1.21.11", &items, &approved, &|_| {}).await.unwrap();
+        Software::Fabric
+            .install("1.21.11", &fabric, &|_| {})
+            .await
+            .unwrap();
+        let versions = crate::modrinth::versions("fabric-api", Software::Fabric, "1.21.11")
+            .await
+            .unwrap();
+        let items = crate::modrinth::plan(&versions[0].id, Software::Fabric, "1.21.11", &[])
+            .await
+            .unwrap();
+        let approved = items
+            .iter()
+            .map(|v| v.version_id.clone())
+            .collect::<Vec<_>>();
+        install(
+            &fabric,
+            Software::Fabric,
+            "1.21.11",
+            &items,
+            &approved,
+            &|_| {},
+        )
+        .await
+        .unwrap();
         assert!(!installed(&fabric, Software::Fabric).unwrap().is_empty());
         assert!(!fabric.join("eula.txt").exists());
     }
