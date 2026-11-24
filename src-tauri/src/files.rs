@@ -125,7 +125,14 @@ pub fn backup(root: &Path, path: &Path, category: &str) -> Result<PathBuf> {
             .ok_or("Missing filename")?
             .to_string_lossy()
     ));
-    std::fs::copy(path, &target).map_err(error)?;
+    let mut input = std::fs::File::open(path).map_err(error)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(error)?;
+    std::io::copy(&mut input, &mut output).map_err(error)?;
+    output.sync_all().map_err(error)?;
     Ok(target)
 }
 fn read(path: &Path) -> Result<Document> {
@@ -249,6 +256,9 @@ pub async fn file_action(
             }
             "rename" | "trash" => {
                 let path = writable(&root, &relative)?;
+                if !path.is_file() {
+                    return Err("Choose a text file, not a directory".into());
+                }
                 if relative.eq_ignore_ascii_case("server.properties") {
                     return Err("The main server properties file cannot be moved".into());
                 }

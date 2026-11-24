@@ -353,7 +353,7 @@ pub async fn configure_world(
                 return Err(e);
             }
         } else {
-            if !dir.join("level.dat").is_file() {
+            if !files::root_path(&root, &format!("{name}/level.dat"))?.is_file() {
                 return Err("Choose a generated or imported world".into());
             }
             update_properties(&root, server.port, &[("level-name", &name)])?;
@@ -394,23 +394,26 @@ pub async fn trash_world(
     confirmation: String,
 ) -> Result<()> {
     crate::profile_task(state.inner().clone(), id, true, move |_, root| {
-        world_name(&name)?;
-        if confirmation != name || active(&root)?.eq_ignore_ascii_case(&name) {
-            return Err(
-                "Confirm the world name; select a different world before removing the active one"
-                    .into(),
-            );
-        }
-        let path = files::root_path(&root, &name)?;
-        if !path.join("level.dat").is_file() {
-            return Err("World data not found".into());
-        }
-        let trash = root.join(".minehost/world-trash");
-        safety::reject_links(&trash)?;
-        std::fs::create_dir_all(&trash).map_err(error)?;
-        std::fs::rename(path, trash.join(format!("{}-{name}", uuid::Uuid::new_v4()))).map_err(error)
+        trash(&root, &name, &confirmation)
     })
     .await
+}
+fn trash(root: &Path, name: &str, confirmation: &str) -> Result<()> {
+    world_name(name)?;
+    if confirmation != name || active(root)?.eq_ignore_ascii_case(name) {
+        return Err(
+            "Confirm the world name; select a different world before removing the active one"
+                .into(),
+        );
+    }
+    let path = files::root_path(root, name)?;
+    if !files::root_path(root, &format!("{name}/level.dat"))?.is_file() {
+        return Err("World data not found".into());
+    }
+    let trash = root.join(".minehost/world-trash");
+    safety::reject_links(&trash)?;
+    std::fs::create_dir_all(&trash).map_err(error)?;
+    std::fs::rename(path, trash.join(format!("{}-{name}", uuid::Uuid::new_v4()))).map_err(error)
 }
 
 #[cfg(test)]
@@ -465,6 +468,21 @@ mod tests {
             b"world-data"
         );
         assert!(export(&root, "survival", &out).is_err());
+    }
+    #[test]
+    fn removing_world_requires_confirmation_and_preserves_data() {
+        let root = temp();
+        std::fs::create_dir(root.join("world")).unwrap();
+        std::fs::write(root.join("world/level.dat"), b"original").unwrap();
+        assert!(trash(&root, "world", "world").is_err());
+        update_properties(&root, 25565, &[("level-name", "other")]).unwrap();
+        assert!(trash(&root, "world", "wrong").is_err());
+        assert!(root.join("world/level.dat").is_file());
+        trash(&root, "world", "world").unwrap();
+        assert!(!root.join("world").exists());
+        let retained = std::fs::read_dir(root.join(".minehost/world-trash"))
+            .unwrap().next().unwrap().unwrap().path();
+        assert_eq!(std::fs::read(retained.join("level.dat")).unwrap(), b"original");
     }
     #[test]
     fn rejects_unsafe_archives_without_leaving_a_world() {
