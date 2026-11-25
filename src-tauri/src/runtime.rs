@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-const USER_AGENT: &str = "MineHost/0.9.1 (https://github.com/Frish07/MineHost)";
+const USER_AGENT: &str = "MineHost/1.0.0 (https://github.com/Frish07/MineHost)";
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -25,7 +25,7 @@ pub fn client() -> Result<Client> {
     Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("MineHost/0.9.1")
+        .user_agent("MineHost/1.0.0")
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(120))
         .build()

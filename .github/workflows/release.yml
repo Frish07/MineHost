@@ -78,7 +78,14 @@ jobs:
           $policyUrl = "https://github.com/$env:GH_REPO/blob/$env:RELEASE_TAG/CODE_SIGNING_POLICY.md"
           $notes = "## Code signing policy`n`n$signingStatus`n`nPolicy: $policyUrl`n`n" + (Get-Content artifacts/README.md -Raw)
           $notes | Set-Content release-notes.md -Encoding utf8NoBOM
-          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --notes-file release-notes.md --title "MineHost $env:RELEASE_TAG" --draft --prerelease
+          $releaseFlags = @()
+          $isPrerelease = $env:RELEASE_TAG -match '^v0\.|-'
+          if ($isPrerelease) { $releaseFlags += '--prerelease' }
+          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --notes-file release-notes.md --title "MineHost $env:RELEASE_TAG" --draft @releaseFlags
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit $env:RELEASE_TAG --draft=false
+          if ($isPrerelease) {
+            gh release edit $env:RELEASE_TAG --draft=false
+          } else {
+            gh release edit $env:RELEASE_TAG --draft=false --latest
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

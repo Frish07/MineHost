@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod addons;
+mod deletion;
 mod archive;
 mod backup_schedule;
 mod backups;
@@ -671,47 +672,14 @@ fn open_folder(state: State<'_, Shared>, id: String) -> Result<()> {
 }
 
 #[tauri::command]
-fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> Result<()> {
-    let _operation = begin(&state, &id)?;
-    let mut inner = lock(&state)?;
-    if inner
-        .agent
-        .as_mut()
-        .is_some_and(playit::ManagedAgent::alive)
-    {
-        return Err("Stop the managed playit agent before deleting a server profile".into());
-    }
-    let server = load(&inner, &id)?;
-    if confirmation != server.name {
-        return Err("Type the exact server name to confirm deletion".into());
-    }
-    let dir = directory(&inner, &id)?;
-    // Rename to a trash directory instead of recursively following a plugin-created junction.
-    let trash = inner.root.join("trash");
-    std::fs::create_dir_all(&trash).map_err(error)?;
-    safety::reject_links(&trash)?;
-    std::fs::rename(dir, trash.join(format!("{}-{}", id, uuid::Uuid::new_v4()))).map_err(error)?;
-    let transaction = inner.db.unchecked_transaction().map_err(error)?;
-    transaction
-        .execute("DELETE FROM connection_history WHERE server_id=?1", [&id])
-        .map_err(error)?;
-    transaction
-        .execute("DELETE FROM servers WHERE id=?1", [&id])
-        .map_err(error)?;
-    transaction
-        .execute("DELETE FROM network_settings WHERE server_id=?1", [&id])
-        .map_err(error)?;
-    transaction
-        .execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id])
-        .map_err(error)?;
-    transaction
-        .execute("DELETE FROM restart_policies WHERE server_id=?1", [&id])
-        .map_err(error)?;
-    transaction.commit().map_err(error)?;
-    inner.lifecycle.remove(&id);
-    Ok(())
+async fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> Result<()> {
+    let shared=state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||deletion::delete(&shared,&id,&confirmation)).await.map_err(error)?
 }
-
+#[tauri::command]
+async fn addon_details(state:State<'_,Shared>,id:String,file_name:String)->Result<addons::Details>{
+    profile_task(state.inner().clone(),id,false,move|server,dir|addons::details(&dir,server.software,&file_name)).await
+}
 #[tauri::command]
 async fn backup_server(state: State<'_, Shared>, id: String) -> Result<String> {
     let shared = state.inner().clone();
@@ -759,7 +727,7 @@ fn main() {
         app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None, drive: drive::Session::default(), lifecycle: HashMap::new(), maintenance: HashMap::new() })));
         backup_schedule::start(app.state::<Shared>().inner(), app.handle().clone());
         Ok(())
-    }).invoke_handler(tauri::generate_handler![playit::playit_auto_tunnel, properties::properties_snapshot, properties::properties_save_form, properties::properties_save_raw, maintenance::maintenance_backup, maintenance::maintenance_status, maintenance::maintenance_cancel, curseforge::cf_open_site, curseforge::cf_details, curseforge::cf_status, curseforge::cf_configure, curseforge::cf_forget, curseforge::cf_test, curseforge::cf_categories, curseforge::cf_search, curseforge::cf_project, curseforge::cf_versions, curseforge::cf_plan, curseforge::cf_install, curseforge::cf_open_project, curseforge::cf_help, monitor::server_metrics, lifecycle::restart_server, lifecycle::cancel_restart, lifecycle::restart_status, lifecycle::save_restart_policy, tick_metrics::query_tick_metrics, drive::drive_help, drive::drive_status, drive::drive_cancel, drive::drive_configure, drive::drive_connect, drive::drive_disconnect, drive::drive_discard, drive::drive_list, drive::drive_upload, drive::drive_resume, drive::drive_download, drive::drive_trash, backup_schedule::backup_schedule, backup_schedule::save_backup_schedule, list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
+    }).invoke_handler(tauri::generate_handler![addon_details, playit::playit_auto_tunnel, properties::properties_snapshot, properties::properties_save_form, properties::properties_save_raw, maintenance::maintenance_backup, maintenance::maintenance_status, maintenance::maintenance_cancel, curseforge::cf_open_site, curseforge::cf_details, curseforge::cf_status, curseforge::cf_configure, curseforge::cf_forget, curseforge::cf_test, curseforge::cf_categories, curseforge::cf_search, curseforge::cf_project, curseforge::cf_versions, curseforge::cf_plan, curseforge::cf_install, curseforge::cf_open_project, curseforge::cf_help, monitor::server_metrics, lifecycle::restart_server, lifecycle::cancel_restart, lifecycle::restart_status, lifecycle::save_restart_policy, tick_metrics::query_tick_metrics, drive::drive_help, drive::drive_status, drive::drive_cancel, drive::drive_configure, drive::drive_connect, drive::drive_disconnect, drive::drive_discard, drive::drive_list, drive::drive_upload, drive::drive_resume, drive::drive_download, drive::drive_trash, backup_schedule::backup_schedule, backup_schedule::save_backup_schedule, list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

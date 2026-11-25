@@ -1,6 +1,6 @@
 [package]
 name = "minehost"
-version = "0.9.1"
+version = "1.0.0"
 description = "Local Minecraft server manager"
 edition = "2021"
 rust-version = "1.88"
