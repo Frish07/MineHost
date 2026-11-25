@@ -17,13 +17,14 @@ fn erase_tree(path: &Path) -> Result<()> {
             Err(e) => return Err(error(e)),
         };
         #[cfg(windows)]
-        let link = {
+        let (link, directory) = {
             use std::os::windows::fs::MetadataExt;
-            metadata.file_attributes() & 0x400 != 0
+            let attributes = metadata.file_attributes();
+            (attributes & 0x400 != 0, attributes & 0x10 != 0)
         };
         #[cfg(not(windows))]
-        let link = metadata.file_type().is_symlink();
-        if metadata.is_dir() && !link {
+        let (link, directory) = (metadata.file_type().is_symlink(), metadata.is_dir());
+        if directory && !link {
             if visited {
                 std::fs::remove_dir(&item).map_err(error)?;
             } else {
@@ -32,7 +33,7 @@ fn erase_tree(path: &Path) -> Result<()> {
                     pending.push((entry.map_err(error)?.path(), false));
                 }
             }
-        } else if metadata.is_dir() {
+        } else if directory {
             std::fs::remove_dir(item).map_err(error)?;
         } else {
             std::fs::remove_file(item).map_err(error)?;
