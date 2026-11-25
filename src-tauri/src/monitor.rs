@@ -87,7 +87,7 @@ impl Process {
             ) != 0
             {
                 let total = ticks(kernel).saturating_add(ticks(user));
-                if let Some((previous, old)) = self.last {
+                if let Some((previous, old)) = self.last.filter(|(at, _)| now.duration_since(*at) <= Duration::from_secs(10)) {
                     sample.cpu_percent = percentage(
                         total.saturating_sub(old),
                         now.duration_since(previous),

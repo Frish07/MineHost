@@ -312,46 +312,32 @@ pub fn launch(
     );
     drop(operation);
     std::thread::spawn(move || {
-        let result = child.wait();
-        let code = result.as_ref().ok().and_then(|s| s.code());
-        let failed = result.as_ref().map(|s| !s.success()).unwrap_or(true);
+        let mut reported = false;
+        let result = loop {
+            match child.wait() {
+                Ok(status) => break status,
+                Err(e) => {
+                    if !reported {
+                        let message = format!("Cannot confirm Java exit: {e}. No replacement process will be started until exit is confirmed.");
+                        crate::append_log(&shared, &app, &id, format!("[MineHost] {message}"));
+                        if let Ok(mut inner) = lock(&shared) {
+                            let control = inner.lifecycle.entry(id.clone()).or_default();
+                            control.phase = "wait_failed".into();
+                            control.last_error = Some(message);
+                        }
+                        reported = true;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        };
+        let code = result.code();
+        let failed = !result.success();
+        let uptime = started.elapsed();
         for reader in readers {
             let _ = reader.recv_timeout(Duration::from_secs(2));
         }
-        let next = (|| -> Result<Option<(Operation, Ticket)>> {
-            let mut inner = lock(&shared)?;
-            if inner.running.get(&id).is_none_or(|r| r.session != session) {
-                return Ok(None);
-            }
-            if let Err(e) = crate::history::end(&inner, &id) {
-                eprintln!("Connection history: {e}");
-            }
-            let running = inner.running.remove(&id).ok_or("Missing process")?;
-            let policy = read(&inner, &id)?;
-            let control = inner.lifecycle.entry(id.clone()).or_default();
-            control.last_exit = code;
-            control.phase = if failed { "crashed" } else { "stopped" }.into();
-            let ticket = reserve(
-                control,
-                &policy,
-                running.intent,
-                failed,
-                started.elapsed(),
-                running.custom_path,
-            );
-            if let Some(ticket) = ticket {
-                inner.busy.insert(id.clone());
-                Ok(Some((
-                    Operation {
-                        shared: shared.clone(),
-                        id: id.clone(),
-                    },
-                    ticket,
-                )))
-            } else {
-                Ok(None)
-            }
-        })();
+        let next = after_exit(&shared, &id, &session, code, failed, uptime);
         crate::append_log(
             &shared,
             &app,
@@ -379,6 +365,42 @@ pub fn launch(
         let _ = app.emit("servers-changed", ());
     });
     Ok(())
+}
+
+fn after_exit(shared: &Shared, id: &str, session: &str, code: Option<i32>, failed: bool, uptime: Duration) -> Result<Option<(Operation, Ticket)>> {
+            let mut inner = lock(shared)?;
+            if inner.running.get(id).is_none_or(|r| r.session != session) {
+                return Ok(None);
+            }
+            if let Err(e) = crate::history::end(&inner, id) {
+                eprintln!("Connection history: {e}");
+            }
+            let running = inner.running.remove(id).ok_or("Missing process")?;
+            let policy = read(&inner, id)?;
+            let control = inner.lifecycle.entry(id.to_string()).or_default();
+            control.last_exit = code;
+            control.phase = if failed { "crashed" } else { "stopped" }.into();
+            let ticket = reserve(
+                control,
+                &policy,
+                running.intent,
+                failed,
+                  uptime,
+                running.custom_path,
+            );
+            if let Some(ticket) = ticket {
+                inner.busy.insert(id.to_string());
+                Ok(Some((
+                    Operation {
+                        shared: shared.clone(),
+                        id: id.to_string(),
+                    },
+                    ticket,
+                )))
+            } else {
+                Ok(None)
+            }
+
 }
 pub fn manual_start(
     shared: &Shared,
@@ -487,7 +509,7 @@ pub fn save_restart_policy(
     if policy.enabled && !consent {
         return Err("Confirm automatic execution of this server after failures".into());
     }
-    let mut inner = lock(&state)?;
+    let inner = lock(&state)?;
     crate::load(&inner, &id)?;
     inner.db.execute("INSERT INTO restart_policies(server_id,data) VALUES(?1,?2) ON CONFLICT(server_id) DO UPDATE SET data=excluded.data",rusqlite::params![id,serde_json::to_string(&policy).map_err(error)?]).map_err(error)?;
     if !policy.enabled {
@@ -500,6 +522,21 @@ pub fn save_restart_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confirmed_child_failure_reserves_profile_and_stale_exit_is_ignored() {
+        let shared=crate::tests::memory_state();
+        let mut child=Command::new("cmd.exe").args(["/d","/c","exit 7"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let session=uuid::Uuid::new_v4().to_string();
+        let id={let mut inner=lock(&shared).unwrap();inner.db.execute_batch(SCHEMA).unwrap();inner.db.execute_batch(crate::history::SCHEMA).unwrap();
+            let id:String=inner.db.query_row("SELECT id FROM servers",[],|r|r.get(0)).unwrap();
+            let policy=Policy{enabled:true,..Default::default()};inner.db.execute("INSERT INTO restart_policies(server_id,data) VALUES(?1,?2)",rusqlite::params![id,serde_json::to_string(&policy).unwrap()]).unwrap();
+            inner.running.insert(id.clone(),Running{input:Arc::new(Mutex::new(child.stdin.take().unwrap())),ram:512,player_query:None,players:None,connected:HashSet::new(),session:session.clone(),process:None,pid:child.id(),started:Instant::now(),intent:Intent::None,custom_path:String::new(),tick_query:None,last_tick_query:None});id};
+        let result=child.wait().unwrap();assert_eq!(result.code(),Some(7));
+        assert!(after_exit(&shared,&id,"old-session",result.code(),true,Duration::ZERO).unwrap().is_none());assert!(lock(&shared).unwrap().running.contains_key(&id));
+        let (operation,ticket)=after_exit(&shared,&id,&session,result.code(),!result.success(),Duration::ZERO).unwrap().unwrap();
+        assert!(crate::begin(&shared,&id).is_err());assert!(!lock(&shared).unwrap().running.contains_key(&id));
+        ticket.cancel.store(true,Ordering::Relaxed);assert!(wait(&ticket).is_err());drop(operation);assert!(crate::begin(&shared,&id).is_ok());
+    }
     #[test]
     fn manual_stop_clean_exit_and_retry_limit_are_distinct() {
         let p = Policy {
