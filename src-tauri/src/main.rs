@@ -12,16 +12,16 @@ mod files;
 mod forge;
 mod history;
 mod lifecycle;
-mod monitor;
-mod tick_metrics;
 mod modpacks;
 mod modrinth;
+mod monitor;
 mod network;
 mod players;
 mod playit;
 mod runtime;
 mod safety;
 mod software;
+mod tick_metrics;
 mod win;
 mod worlds;
 
@@ -372,10 +372,19 @@ struct LogEvent {
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
     append_session_log(shared, app, id, line, None);
 }
-fn append_session_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String, session: Option<&str>) {
+fn append_session_log(
+    shared: &Shared,
+    app: &tauri::AppHandle,
+    id: &str,
+    line: String,
+    session: Option<&str>,
+) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
-        if session.is_some_and(|session|inner.running.get(id).is_none_or(|r|r.session!=session)) {return;}
+        if session.is_some_and(|session| inner.running.get(id).is_none_or(|r| r.session != session))
+        {
+            return;
+        }
         if let Err(e) = history::record(&mut inner, id, &line) {
             eprintln!("Connection history: {e}");
         }
@@ -431,9 +440,18 @@ fn read_pipe(
 }
 
 #[tauri::command]
-async fn start_server(state: State<'_, Shared>, app: tauri::AppHandle, id: String, custom_path: String) -> Result<()> {
+async fn start_server(
+    state: State<'_, Shared>,
+    app: tauri::AppHandle,
+    id: String,
+    custom_path: String,
+) -> Result<()> {
     let shared = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move ||lifecycle::manual_start(&shared, app, &id, custom_path)).await.map_err(error)?
+    tauri::async_runtime::spawn_blocking(move || {
+        lifecycle::manual_start(&shared, app, &id, custom_path)
+    })
+    .await
+    .map_err(error)?
 }
 #[tauri::command]
 fn send_command(state: State<'_, Shared>, id: String, command: String) -> Result<()> {
@@ -681,7 +699,9 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     transaction
         .execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id])
         .map_err(error)?;
-    transaction.execute("DELETE FROM restart_policies WHERE server_id=?1", [&id]).map_err(error)?;
+    transaction
+        .execute("DELETE FROM restart_policies WHERE server_id=?1", [&id])
+        .map_err(error)?;
     transaction.commit().map_err(error)?;
     inner.lifecycle.remove(&id);
     Ok(())
