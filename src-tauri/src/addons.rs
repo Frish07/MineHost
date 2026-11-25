@@ -599,6 +599,7 @@ pub async fn install_verified(
         }
         if old.is_some()
             && old_file.is_file()
+            && std::fs::metadata(&old_file).map_err(error)?.len() == item.size
             && old_base.eq_ignore_ascii_case(&item.file_name)
             && file_hash(&old_file, &item.checksum)? == item.checksum
         {
