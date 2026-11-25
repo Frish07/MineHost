@@ -4,8 +4,9 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { DownloadStatus } from './DownloadStatus';
 import { downloadedSize, type DownloadProgress } from './download';
 import {GalleryPanel} from './GalleryPanel';
+import {CurseForgePanel} from './CurseForgePanel';
 
-type Installed = {fileName: string; enabled: boolean; size: number; projectId: string | null; versionId: string | null; versionNumber: string | null};
+type Installed = {provider: 'modrinth' | 'curseforge' | null; fileName: string; enabled: boolean; size: number; projectId: string | null; versionId: string | null; versionNumber: string | null};
 type Hit = {project_id: string; title: string; description: string; downloads: number};
 type Version = {id: string; name: string; version_number: string};
 type PlanItem = {projectId: string; versionId: string; title: string; versionNumber: string; fileName: string; size: number};
@@ -17,7 +18,8 @@ const texts = {
 
 export function AddonsPanel({id, software, game, language, locked, running, installedCore, consent, setConsent, act}: Props) {
   const t = texts[language];
-  const [tab, setTab] = useState<'installed' | 'catalog'>('installed');
+  const [tab, setTab] = useState<'installed' | 'catalog' | 'curseforge'>('installed');
+  const [cfUpdate,setCfUpdate]=useState<{project:number;currentFile:number;request:number}|null>(null);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('relevance');
@@ -60,7 +62,7 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
     const files = await open({multiple: true, directory: false, filters: [{name: 'JAR', extensions: ['jar']}]});
     for (const source of typeof files === 'string' ? [files] : files ?? []) await invoke('import_addon', {id, source, consent});
   });
-  const update = (addon: Installed) => {void act(async () => {
+  const update = (addon: Installed) => {if(addon.provider==='curseforge'){setCfUpdate({project:Number(addon.projectId),currentFile:Number(addon.versionId),request:Date.now()});setTab('curseforge');return;}void act(async () => {
     const values = await invoke<Version[]>('addon_versions', {id, projectId: addon.projectId});
     if (!values.length) throw new Error(t.noVersions);
     if (values[0].id === addon.versionId) return t.latest;
@@ -72,11 +74,11 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
     <p className="muted">{t.stopped}</p>
     {!installedCore && <p className="muted">{language === 'ru' ? 'Сначала установите выбранное ядро в разделе «Сервер и Java».' : 'Install the selected server software in Server & Java first.'}</p>}
     <label className="check"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/>{t.risk}</label>
-    <div className="button-row addon-tabs"><button className={tab === 'installed' ? 'primary' : ''} onClick={() => setTab('installed')}>{t.installed} · {installed.length}</button><button className={tab === 'catalog' ? 'primary' : ''} onClick={() => setTab('catalog')}>{t.catalog}</button><button disabled={!editable || !consent} onClick={importFiles}>{t.import}</button></div>
+    <div className="button-row addon-tabs"><button className={tab === 'installed' ? 'primary' : ''} onClick={() => setTab('installed')}>{t.installed} · {installed.length}</button><button className={tab === 'catalog' ? 'primary' : ''} onClick={() => setTab('catalog')}>{t.catalog}</button><button className={tab === 'curseforge' ? 'primary' : ''} onClick={()=>setTab('curseforge')}>CurseForge</button><button disabled={!editable || !consent} onClick={importFiles}>{t.import}</button></div>
     {loadError && <p role="alert" className="addon-error">{loadError}</p>}
     {progress && <DownloadStatus progress={progress} language={language}/>}
     {plan && <div className="install-plan"><h3>{t.plan}</h3><p className="muted">{t.planHint}</p>{plan.items.map(item => <div key={item.versionId} className="plan-item"><strong>{item.title} <small>{item.versionNumber}</small></strong><span>{item.fileName} · {downloadedSize(item.size, language)}</span></div>)}<div className="button-row"><button className="primary" disabled={!editable || !consent} onClick={install}>{t.install} · {plan.items.length}</button><button disabled={locked} onClick={() => setPlan(null)}>{t.cancel}</button></div></div>}
-    {tab === 'installed' ? <div className="addon-list">{!installed.length && <p className="muted">{t.empty}</p>}{installed.map(addon => <article className="addon-row" key={addon.fileName}><div><strong>{addon.fileName}</strong><p className="muted">{addon.enabled ? t.enabled : t.disabled} · {downloadedSize(addon.size, language)} · {addon.versionNumber ?? t.manual}</p></div><div className="button-row"><button disabled={!editable} onClick={() => run(() => invoke('set_addon_enabled', {id, fileName: addon.fileName, enabled: !addon.enabled}))}>{addon.enabled ? t.disable : t.enable}</button>{addon.projectId && <button disabled={!editable} onClick={() => update(addon)}>{t.update}</button>}<button className="danger" disabled={!editable} onClick={() => {if(window.confirm(`${t.deleteConfirm}\n${addon.fileName}`)) run(() => invoke('remove_addon', {id, fileName: addon.fileName, confirmation: addon.fileName}));}}>{t.remove}</button></div></article>)}</div> : <>
+    {tab === 'installed' ? <div className="addon-list">{!installed.length && <p className="muted">{t.empty}</p>}{installed.map(addon => <article className="addon-row" key={addon.fileName}><div><strong>{addon.fileName}</strong><p className="muted">{addon.enabled ? t.enabled : t.disabled} · {downloadedSize(addon.size, language)} · {addon.provider ? `${addon.provider} · ` : ''}{addon.versionNumber ?? t.manual}</p></div><div className="button-row"><button disabled={!editable} onClick={() => run(() => invoke('set_addon_enabled', {id, fileName: addon.fileName, enabled: !addon.enabled}))}>{addon.enabled ? t.disable : t.enable}</button>{addon.projectId && <button disabled={!editable} onClick={() => update(addon)}>{t.update}</button>}<button className="danger" disabled={!editable} onClick={() => {if(window.confirm(`${t.deleteConfirm}\n${addon.fileName}`)) run(() => invoke('remove_addon', {id, fileName: addon.fileName, confirmation: addon.fileName}));}}>{t.remove}</button></div></article>)}</div> : tab === 'curseforge' ? <CurseForgePanel id={id} software={software} game={game} language={language} locked={locked} running={running} installedCore={installedCore} consent={consent} act={act} update={cfUpdate}/> : <>
       <form className="catalog-search" onSubmit={e => {e.preventDefault(); search();}}><input aria-label={t.search} maxLength={100} placeholder={t.placeholder} value={query} onChange={e => setQuery(e.target.value)}/><select aria-label={t.relevance} value={sort} onChange={e => setSort(e.target.value)}><option value="relevance">{t.relevance}</option><option value="downloads">{t.downloads}</option><option value="updated">{t.updated}</option></select><select aria-label={language === 'ru' ? 'Категория' : 'Category'} value={category} onChange={e=>setCategory(e.target.value)}><option value="">{language === 'ru' ? 'Все категории' : 'All categories'}</option>{categories.map(v=><option key={v.name}>{v.name}</option>)}</select><button className="primary" disabled={locked}>{t.search}</button></form>
       <p className="muted">{t.note}</p>{searched && !hits.length && <p className="muted">{t.noResults}</p>}
       <div className="catalog-grid">{hits.map(hit => <article className="catalog-card" key={hit.project_id}><h3>{hit.title}</h3><p className="muted">{hit.description}</p><small>{hit.downloads.toLocaleString()} ↓</small><div className="button-row"><button disabled={locked} onClick={() => choose(hit)}>{t.choose}</button><button disabled={locked} onClick={() => {void act(() => invoke('open_addon_project', {projectId: hit.project_id}));}}>{t.project}</button></div></article>)}</div>

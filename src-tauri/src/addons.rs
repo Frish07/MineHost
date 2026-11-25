@@ -10,13 +10,41 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use std::{
     collections::HashSet,
+    future::Future,
     io::Read,
     path::{Path, PathBuf},
+    pin::Pin,
 };
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider { #[default] Modrinth, Curseforge }
+#[derive(Clone)]
+pub struct InstallItem {
+    pub provider: Provider, pub project_id: String, pub version_id: String,
+    pub version_number: String, pub file_name: String, pub size: u64,
+    pub url: String, pub checksum: String,
+}
+impl From<&PlanItem> for InstallItem {
+    fn from(v: &PlanItem) -> Self { Self{provider:Provider::Modrinth,project_id:v.project_id.clone(),version_id:v.version_id.clone(),version_number:v.version_number.clone(),file_name:v.file_name.clone(),size:v.size,url:v.url.clone(),checksum:v.sha512.clone()} }
+}
+pub type Progress<'a> = dyn Fn(DownloadProgress) + Send + Sync + 'a;
+pub type DownloadFuture<'a> = Pin<Box<dyn Future<Output=Result<()>>+Send+'a>>;
+pub trait AddonProvider: Send + Sync {
+    fn provider(&self)->Provider;
+    fn download<'a>(&'a self,item: &'a InstallItem,path: &'a Path,progress: &'a Progress<'a>)->DownloadFuture<'a>;
+}
+struct ModrinthProvider;
+impl AddonProvider for ModrinthProvider {
+    fn provider(&self)->Provider {Provider::Modrinth}
+    fn download<'a>(&'a self,item: &'a InstallItem,path: &'a Path,progress: &'a Progress<'a>)->DownloadFuture<'a> {Box::pin(async move {runtime::download(&item.url,&item.checksum,path,progress).await})}
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Managed {
+    #[serde(default)]
+    pub provider: Provider,
     pub project_id: String,
     pub version_id: String,
     pub file_name: String,
@@ -25,6 +53,7 @@ pub struct Managed {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Installed {
+    pub provider: Option<Provider>,
     pub file_name: String,
     pub enabled: bool,
     pub size: u64,
@@ -114,9 +143,11 @@ pub fn managed(root: &Path) -> Result<Vec<Managed>> {
     let mut names = HashSet::new();
     for item in &values {
         jar_filename(&item.file_name)?;
-        crate::modrinth::identifier(&item.project_id)?;
-        crate::modrinth::identifier(&item.version_id)?;
-        if !projects.insert(&item.project_id) || !names.insert(item.file_name.to_ascii_lowercase())
+        match item.provider {
+            Provider::Modrinth => { crate::modrinth::identifier(&item.project_id)?; crate::modrinth::identifier(&item.version_id)?; }
+            Provider::Curseforge => {crate::curseforge::identifier(&item.project_id)?;crate::curseforge::identifier(&item.version_id)?;}
+        }
+        if !projects.insert((item.provider,&item.project_id)) || !names.insert(item.file_name.to_ascii_lowercase())
         {
             return Err("Duplicate addon registry entry".into());
         }
@@ -162,6 +193,7 @@ pub fn installed(root: &Path, software: Software) -> Result<Vec<Installed>> {
             .iter()
             .find(|v| v.file_name.eq_ignore_ascii_case(base));
         result.push(Installed {
+            provider: record.map(|v|v.provider),
             enabled: !name.ends_with(".disabled"),
             size: meta.len(),
             file_name: name,
@@ -397,12 +429,15 @@ pub fn remove(root: &Path, software: Software, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn file_hash(path: &Path) -> Result<String> {
+pub(crate) fn file_hash(path: &Path, checksum: &str) -> Result<String> {
     if std::fs::metadata(path).map_err(error)?.len() > 256 * 1024 * 1024 {
         return Err("Existing addon exceeds the 256 MiB limit".into());
     }
     let mut input = std::fs::File::open(path).map_err(error)?;
-    let mut hasher = Sha512::new();
+    let mut hasher: Box<dyn sha2::digest::DynDigest> = match checksum.len() {
+        128 => Box::new(Sha512::new()), 40 => Box::new(sha1::Sha1::new()),32 => Box::new(md5::Md5::new()),
+        _ => return Err("Unsupported addon checksum".into()),
+    };
     let mut bytes = [0_u8; 65536];
     loop {
         let size = input.read(&mut bytes).map_err(error)?;
@@ -411,7 +446,7 @@ fn file_hash(path: &Path) -> Result<String> {
         }
         hasher.update(&bytes[..size]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher.finalize().iter().map(|b|format!("{b:02x}")).collect())
 }
 
 fn fabric_loader(root: &Path, software: Software) -> Result<Option<String>> {
@@ -439,6 +474,16 @@ pub async fn install(
     approved: &[String],
     progress: &(dyn Fn(DownloadProgress) + Send + Sync),
 ) -> Result<()> {
+    let items=items.iter().map(InstallItem::from).collect::<Vec<_>>();
+    install_verified(root,software,game,&items,approved,progress,&ModrinthProvider).await
+}
+pub async fn install_verified(
+    root: &Path, software: Software, game: &str, items: &[InstallItem], approved: &[String],
+    progress: &Progress<'_>, provider: &dyn AddonProvider,
+) -> Result<()> {
+    if items.is_empty() || items.len()>32 || items.iter().any(|v|v.provider!=provider.provider() || v.size==0 || v.size>256*1024*1024) {
+        return Err("Invalid addon provider plan or file size".into());
+    }
     let expected: HashSet<&str> = items.iter().map(|v| v.version_id.as_str()).collect();
     let approved: HashSet<&str> = approved.iter().map(String::as_str).collect();
     if expected != approved {
@@ -454,9 +499,9 @@ pub async fn install(
     let mut done = 0_u64;
     for item in items {
         jar_filename(&item.file_name)?;
-        let old = registry.iter().find(|v| v.project_id == item.project_id);
+        let old = registry.iter().find(|v| v.provider==item.provider && v.project_id == item.project_id);
         if registry.iter().any(|v| {
-            v.file_name.eq_ignore_ascii_case(&item.file_name) && v.project_id != item.project_id
+            v.file_name.eq_ignore_ascii_case(&item.file_name) && (v.provider!=item.provider || v.project_id != item.project_id)
         }) {
             return Err("Addon filename belongs to a different installed project".into());
         }
@@ -485,10 +530,11 @@ pub async fn install(
         if old.is_some()
             && old_file.is_file()
             && old_base.eq_ignore_ascii_case(&item.file_name)
-            && file_hash(&old_file)? == item.sha512
+            && file_hash(&old_file,&item.checksum)? == item.checksum
         {
-            registry.retain(|v| v.project_id != item.project_id);
+            registry.retain(|v| v.provider!=item.provider || v.project_id != item.project_id);
             registry.push(Managed {
+                provider: item.provider,
                 project_id: item.project_id.clone(),
                 version_id: item.version_id.clone(),
                 file_name: item.file_name.clone(),
@@ -510,9 +556,9 @@ pub async fn install(
                 Some(total),
             ))
         };
-        runtime::download(&item.url, &item.sha512, &file, &report).await?;
+        provider.download(item,&file,&report).await?;
         if std::fs::metadata(&file).map_err(error)?.len() != item.size {
-            return Err("Addon length differs from Modrinth metadata".into());
+            return Err("Addon length differs from provider metadata".into());
         }
         validate_jar(&file, software, game, loader.as_deref())?;
         done += item.size;
@@ -531,7 +577,7 @@ pub async fn install(
 fn commit_files(
     root: &Path,
     backups: &Path,
-    changes: &[(PlanItem, PathBuf, PathBuf, PathBuf)],
+    changes: &[(InstallItem, PathBuf, PathBuf, PathBuf)],
     mut registry: Vec<Managed>,
 ) -> Result<()> {
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -551,8 +597,9 @@ fn commit_files(
             }
             std::fs::rename(staged, target).map_err(error)?;
             created.push(target.clone());
-            registry.retain(|v| v.project_id != item.project_id);
+            registry.retain(|v| v.provider!=item.provider || v.project_id != item.project_id);
             registry.push(Managed {
+                provider: item.provider,
                 project_id: item.project_id.clone(),
                 version_id: item.version_id.clone(),
                 file_name: item.file_name.clone(),
@@ -706,6 +753,7 @@ mod tests {
             url: String::new(),
             sha512: String::new(),
         };
+        let item = InstallItem::from(&item);
         let new_a = dir.join("new-a.jar");
         let new_b = dir.join("new-b.jar");
         let changes = vec![

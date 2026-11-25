@@ -73,11 +73,15 @@ pub async fn catalog_details(project_id: String) -> Result<Details> {
     })
 }
 async fn image(url: &str) -> Result<String> {
+    provider_image(url, "cdn.modrinth.com").await
+}
+pub(crate) async fn provider_image(url: &str, host: &str) -> Result<String> {
     let parsed = reqwest::Url::parse(url).map_err(error)?;
-    if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
+    if parsed.scheme() != "https" || parsed.host_str() != Some(host) || !parsed.username().is_empty() || parsed.password().is_some() || parsed.port_or_known_default()!=Some(443) {
         return Err("Unapproved image host".into());
     }
-    let mut response = runtime::client()?
+    let image_client=reqwest::Client::builder().https_only(true).redirect(reqwest::redirect::Policy::none()).user_agent("MineHost/0.8.0").timeout(std::time::Duration::from_secs(20)).build().map_err(error)?;
+    let mut response = image_client
         .get(url)
         .timeout(std::time::Duration::from_secs(20))
         .send()
