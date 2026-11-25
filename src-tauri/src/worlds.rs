@@ -53,7 +53,10 @@ fn properties(root: &Path) -> Result<String> {
 }
 fn active(root: &Path) -> Result<String> {
     let content = properties(root)?;
-    let selected = crate::properties::values(&content)?.get("level-name").cloned().unwrap_or_else(|| "world".into());
+    let selected = crate::properties::values(&content)?
+        .get("level-name")
+        .cloned()
+        .unwrap_or_else(|| "world".into());
     world_name(&selected)?;
     Ok(selected)
 }

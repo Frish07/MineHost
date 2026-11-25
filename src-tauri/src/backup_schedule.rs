@@ -144,7 +144,13 @@ fn retain_local(root: &Path, id: &str, keep: usize) -> Result<()> {
     }
     Ok(())
 }
-fn perform(shared: &Shared, id: &str, p: &Plan, cancel: &AtomicBool, app: Option<&tauri::AppHandle>) -> Result<()> {
+fn perform(
+    shared: &Shared,
+    id: &str,
+    p: &Plan,
+    cancel: &AtomicBool,
+    app: Option<&tauri::AppHandle>,
+) -> Result<()> {
     let (server, root, profile) = {
         let inner = lock(shared)?;
         (
@@ -163,11 +169,26 @@ fn perform(shared: &Shared, id: &str, p: &Plan, cancel: &AtomicBool, app: Option
     };
     if !resumed {
         drive::progress(shared, "preparing", 0, 0);
-        let source = if let Some(app)=app {
-            let outcome=crate::maintenance::capture(shared,app.clone(),id,p.settings.maintenance,Some(cancel))?;
-            if let Some(error)=outcome.error {return Err(error);}
-            root.join("backups").join(outcome.backup.ok_or("Scheduled backup produced no archive")?)
-        } else {let _profile=crate::begin(shared,id)?;backups::create(&root,&server,&profile)?};
+        let source = if let Some(app) = app {
+            let outcome = crate::maintenance::capture(
+                shared,
+                app.clone(),
+                id,
+                p.settings.maintenance,
+                Some(cancel),
+            )?;
+            if let Some(error) = outcome.error {
+                return Err(error);
+            }
+            root.join("backups").join(
+                outcome
+                    .backup
+                    .ok_or("Scheduled backup produced no archive")?,
+            )
+        } else {
+            let _profile = crate::begin(shared, id)?;
+            backups::create(&root, &server, &profile)?
+        };
         let name = format!("{id}-auto-{}.zip", uuid::Uuid::new_v4());
         let path = root.join("backups").join(&name);
         std::fs::rename(source, &path).map_err(error)?;

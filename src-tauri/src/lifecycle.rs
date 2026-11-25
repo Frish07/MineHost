@@ -424,11 +424,22 @@ pub fn command(shared: &Shared, id: &str, text: &str) -> Result<()> {
     safety::command(text)?;
     let text = text.trim().trim_start_matches('/');
     let mut inner = lock(shared)?;
-    let stop = matches!(text.split_whitespace().next(),Some("stop"|"minecraft:stop"));
-    let maintenance_active=inner.maintenance.get(id).is_some_and(|j|j.status.active);
+    let stop = matches!(
+        text.split_whitespace().next(),
+        Some("stop" | "minecraft:stop")
+    );
+    let maintenance_active = inner.maintenance.get(id).is_some_and(|j| j.status.active);
     if maintenance_active {
-        if stop {crate::maintenance::cancel_in(&inner,id);if !inner.running.contains_key(id){return Ok(());}}
-        else {return Err("Wait for maintenance backup to finish or cancel it before sending commands".into());}
+        if stop {
+            crate::maintenance::cancel_in(&inner, id);
+            if !inner.running.contains_key(id) {
+                return Ok(());
+            }
+        } else {
+            return Err(
+                "Wait for maintenance backup to finish or cancel it before sending commands".into(),
+            );
+        }
     }
     let running = inner.running.get_mut(id).ok_or("Server is not running")?;
     let mut input = running.input.lock().map_err(error)?;
