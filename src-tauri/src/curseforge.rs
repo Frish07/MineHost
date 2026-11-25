@@ -1271,7 +1271,17 @@ mod tests {
         let previous = std::fs::read(root.join("plugins/test.jar")).unwrap();
         let mut wrong_size = item.clone();
         wrong_size.size += 1;
-        assert!(addons::install_verified(&root,Software::Paper,"1.21.1",&[wrong_size],&["100".into()],&|_|{},&provider).await.is_err());
+        assert!(addons::install_verified(
+            &root,
+            Software::Paper,
+            "1.21.1",
+            &[wrong_size],
+            &["100".into()],
+            &|_| {},
+            &provider
+        )
+        .await
+        .is_err());
         let mut changed = item.clone();
         changed.version_id = "101".into();
         changed.checksum = "0000000000000000000000000000000000000000".into();
