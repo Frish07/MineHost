@@ -42,7 +42,7 @@ fn client() -> Result<Client> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(600))
-        .user_agent("MineHost/0.9.0 (https://github.com/Frish07/MineHost)")
+        .user_agent("MineHost/0.9.1 (https://github.com/Frish07/MineHost)")
         .build()
         .map_err(|_| "Cannot create CurseForge HTTPS client".into())
 }

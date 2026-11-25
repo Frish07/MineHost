@@ -5,7 +5,7 @@ on:
       tag:
         description: Version tag matching application version
         required: true
-        default: v0.9.0
+        default: v0.9.1
 permissions:
   contents: write
   actions: write

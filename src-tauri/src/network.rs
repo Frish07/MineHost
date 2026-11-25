@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::State;
 pub const SCHEMA: &str =
-    "CREATE TABLE IF NOT EXISTS network_settings(server_id TEXT PRIMARY KEY,data TEXT NOT NULL);";
+    "CREATE TABLE IF NOT EXISTS network_settings(server_id TEXT PRIMARY KEY,data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS playit_requests(profile_id TEXT NOT NULL,agent_id TEXT NOT NULL,port INTEGER NOT NULL,tunnel_id TEXT,PRIMARY KEY(profile_id,agent_id,port));";
 const SCRIPT: &str = include_str!("network.ps1");
 pub trait TunnelProvider {
     fn endpoint(&self) -> Result<ConnectionEndpoint>;
@@ -229,7 +229,7 @@ fn settings(shared: &Shared, id: &str) -> Result<Settings> {
         Ok(Settings::defaults(server.port))
     }
 }
-fn operation(shared: &Shared, id: &str) -> Result<crate::Operation> {
+pub(crate) fn operation(shared: &Shared, id: &str) -> Result<crate::Operation> {
     let mut inner = lock(shared)?;
     crate::load(&inner, id)?;
     if !inner.busy.insert(id.into()) {

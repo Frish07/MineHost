@@ -1,5 +1,6 @@
 use crate::{error, lock, runtime, safety, win, Result, Shared};
 use serde::Serialize;
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -177,7 +178,7 @@ pub async fn playit_claim(state: State<'_, Shared>, consent: bool) -> Result<Str
     let code = uuid::Uuid::new_v4().simple().to_string()[..10].to_string();
     api(
         "/claim/setup",
-        &json!({"code":code,"agent_type":"assignable","version":"MineHost 0.5.0"}),
+        &json!({"code":code,"agent_type":"self-managed","version":concat!("MineHost ",env!("CARGO_PKG_VERSION"))}),
     )
     .await?;
     lock(&state)?.claim = Some(Claim {
@@ -199,7 +200,7 @@ pub async fn playit_finish_claim(state: State<'_, Shared>) -> Result<String> {
     };
     let setup = api(
         "/claim/setup",
-        &json!({"code":code,"agent_type":"assignable","version":"MineHost 0.5.0"}),
+        &json!({"code":code,"agent_type":"self-managed","version":concat!("MineHost ",env!("CARGO_PKG_VERSION"))}),
     )
     .await?;
     let phase = setup.as_str().ok_or("Unknown claim response")?;
@@ -551,9 +552,76 @@ pub fn network_open_link(kind: String, claim_url: Option<String>) -> Result<()> 
         .map_err(error)?;
     Ok(())
 }
+
+// Agent keys never leave Rust. Never follow an authenticated redirect or retry creation.
+async fn agent_api(path: &str, input: &Value, secret: &str) -> Result<Value> {
+    let client=reqwest::Client::builder().https_only(true).redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(20)).build().map_err(error)?;
+    let response=client.post(format!("https://api.playit.gg{path}")).header("Authorization",format!("agent-key {secret}")).header("User-Agent",concat!("MineHost/",env!("CARGO_PKG_VERSION"))).json(input).send().await.map_err(|_|"Playit request failed; check the connection and retry setup. A creation request will not be repeated automatically.".to_string())?;
+    let status=response.status();
+    if !status.is_success(){return Err(format!("Playit HTTP {}. Check account verification, limits and agent permissions in the dashboard.",status.as_u16()));}
+    let mut response=response;let mut bytes=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_|"Playit response interrupted")?{if bytes.len()+chunk.len()>512*1024{return Err("Playit response exceeds limit".into());}bytes.extend_from_slice(&chunk);}
+    let value:Value=serde_json::from_slice(&bytes).map_err(|_|"Invalid playit response")?;
+    if value["status"]!="success" {let code=value["data"].as_str().filter(|s|s.len()<=80&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')).unwrap_or("RequestDeclined");return Err(format!("Playit: {code}. Check account verification, free tunnel limits and agent permissions. No paid option is selected automatically."));}
+    Ok(value["data"].clone())
+}
+fn create_request(agent:&str,profile:&str,port:u16)->Value {
+    json!({"name":format!("MineHost-{profile}-{port}"),"tunnel_type":"minecraft-java","tunnel_description":null,"port_type":"tcp","port_count":1,"origin":{"type":"agent","data":{"agent_id":agent,"local_ip":"127.0.0.1","local_port":port}},"enabled":true,"alloc":null,"firewall_id":null,"proxy_protocol":null})
+}
+fn find_minecraft_tunnel(data:&Value,port:u16,expected:Option<&str>)->Result<Option<(String,String)>> {
+    let entries=data["tunnels"].as_array().ok_or("Missing playit tunnels snapshot")?;
+    for t in entries.iter().take(256){
+        if expected.is_some_and(|id|t["id"].as_str()!=Some(id))||t["local_port"].as_u64()!=Some(u64::from(port))||t["local_ip"]!="127.0.0.1"||t["proto"]!="tcp"||t["tunnel_type"]!="minecraft-java"||!t["disabled"].is_null(){continue;}
+        let id=t["id"].as_str().ok_or("Invalid tunnel ID")?;uuid::Uuid::parse_str(id).map_err(|_|"Invalid tunnel ID")?;
+        let Some(host)=t["assigned_domain"].as_str().filter(|v|!v.is_empty()) else {continue;};
+        let Some(public_port)=t.pointer("/port/from").and_then(Value::as_u64).and_then(|v|u16::try_from(v).ok()).filter(|v|*v>0) else {continue;};
+        let address=format!("{}:{public_port}",crate::network::host(host)?);
+        return Ok(Some((id.to_string(),address)));
+    }Ok(None)
+}
+#[derive(Serialize)] #[serde(rename_all="camelCase")]
+pub struct AutoTunnel {phase:&'static str,tunnel_id:Option<String>,address:Option<String>}
+#[tauri::command]
+pub async fn playit_auto_tunnel(state:State<'_,Shared>,id:String,consent:bool)->Result<AutoTunnel>{
+    if !consent{return Err("Approve creating a free Minecraft Java tunnel to this profile and exposing it to Internet players".into());}
+    let _agent=begin(&state)?;let _profile=crate::network::operation(&state,&id)?;
+    let port={let inner=lock(&state)?;crate::load(&inner,&id)?.port};
+    let secret=win::credential_read(CREDENTIAL)?.ok_or("Link the playit agent first")?;
+    let data=agent_api("/agents/rundata",&json!({}),&secret).await?;
+    let agent=data["agent_id"].as_str().ok_or("Missing playit agent ID")?;uuid::Uuid::parse_str(agent).map_err(|_|"Invalid playit agent ID")?;
+    let previous={let inner=lock(&state)?;inner.db.query_row("SELECT tunnel_id FROM playit_requests WHERE profile_id=?1 AND agent_id=?2 AND port=?3",rusqlite::params![id,agent,port],|r|r.get::<_,Option<String>>(0)).optional().map_err(error)?};
+    // A known created ID must match exactly. An uncertain POST can be recovered by its
+    // destination; it is never blindly repeated after a timeout or application restart.
+    if let Some((tunnel_id,address))=find_minecraft_tunnel(&data,port,previous.as_ref().and_then(|v|v.as_deref()))?{
+        let inner=lock(&state)?;inner.db.execute("INSERT INTO playit_requests(profile_id,agent_id,port,tunnel_id) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id,agent_id,port) DO UPDATE SET tunnel_id=excluded.tunnel_id",rusqlite::params![id,agent,port,tunnel_id]).map_err(error)?;
+        return Ok(AutoTunnel{phase:"ready",tunnel_id:Some(tunnel_id),address:Some(address)});
+    }
+    if previous.is_some(){return Ok(AutoTunnel{phase:"pending",tunnel_id:None,address:None});}
+    if data["agent_type"]!="self-managed"{return Err("This older agent was linked for manual configuration. Create its tunnel in the playit dashboard, or stop the agent, forget the local link and link it again for automatic setup. Existing account tunnels are never deleted automatically.".into());}
+    {let inner=lock(&state)?;inner.db.execute("INSERT INTO playit_requests(profile_id,agent_id,port,tunnel_id) VALUES(?1,?2,?3,NULL)",rusqlite::params![id,agent,port]).map_err(error)?;}
+    let created=match agent_api("/tunnels/create",&create_request(agent,&id,port),&secret).await {
+        Ok(value)=>value,
+        Err(e)=>{
+            // Explicit validation/auth failures did not create an allocation. Uncertain
+            // transport/5xx/parse failures retain the marker and cannot duplicate it.
+            if e.starts_with("Playit: ")||e.starts_with("Playit HTTP 4") {let inner=lock(&state)?;inner.db.execute("DELETE FROM playit_requests WHERE profile_id=?1 AND agent_id=?2 AND port=?3 AND tunnel_id IS NULL",rusqlite::params![id,agent,port]).map_err(error)?;}
+            return Err(e);
+        }
+    };
+    let tunnel=created["id"].as_str().ok_or("Creation response did not contain a tunnel ID; inspect the playit dashboard before retrying")?;uuid::Uuid::parse_str(tunnel).map_err(|_|"Invalid created tunnel ID")?;
+    {let inner=lock(&state)?;inner.db.execute("UPDATE playit_requests SET tunnel_id=?4 WHERE profile_id=?1 AND agent_id=?2 AND port=?3",rusqlite::params![id,agent,port,tunnel]).map_err(error)?;}
+    Ok(AutoTunnel{phase:"pending",tunnel_id:Some(tunnel.into()),address:None})
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_endpoint_rejects_wrong_destination_protocol_disabled_and_unsafe_addresses(){
+        let id=uuid::Uuid::new_v4().to_string();let good=json!({"id":id,"local_port":25565,"local_ip":"127.0.0.1","proto":"tcp","tunnel_type":"minecraft-java","disabled":null,"assigned_domain":"test.ply.gg","port":{"from":1234,"to":1235}});
+        assert_eq!(find_minecraft_tunnel(&json!({"tunnels":[good.clone()]}),25565,Some(&id)).unwrap().unwrap().1,"test.ply.gg:1234");
+        for (field,value) in [("local_port",json!(25566)),("local_ip",json!("192.168.1.2")),("proto",json!("udp")),("tunnel_type",json!("minecraft-bedrock")),("disabled",json!("account-limit"))]{let mut bad=good.clone();bad[field]=value;assert!(find_minecraft_tunnel(&json!({"tunnels":[bad]}),25565,None).unwrap().is_none());}
+        assert!(find_minecraft_tunnel(&json!({"tunnels":[good.clone()]}),25565,Some(&uuid::Uuid::new_v4().to_string())).unwrap().is_none());
+        let mut bad=good;bad["assigned_domain"]=json!("https://evil.example/path");assert!(find_minecraft_tunnel(&json!({"tunnels":[bad]}),25565,None).is_err());
+    }
     #[test]
     fn tunnel_snapshot_excludes_agent_secrets_and_checks_destination() {
         let value = json!({"state":"running","data":{"login_link":"sensitive","tunnels":[{"id":uuid::Uuid::new_v4().to_string(),"display_address":"test.ply.gg:1234","destination":"127.0.0.1:25565","is_disabled":false}]}});

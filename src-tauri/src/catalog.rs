@@ -88,7 +88,7 @@ pub(crate) async fn provider_image(url: &str, host: &str) -> Result<String> {
     let image_client = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("MineHost/0.9.0")
+        .user_agent("MineHost/0.9.1")
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(error)?;
