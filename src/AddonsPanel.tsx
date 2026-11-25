@@ -25,7 +25,7 @@ export function AddonsPanel({id, software, game, language, locked, running, inst
   const [sort, setSort] = useState('relevance');
   const [category,setCategory]=useState('');
   const [categories,setCategories]=useState<{name:string}[]>([]);
-  useEffect(()=>{void invoke<{name:string}[]>('catalog_categories').then(setCategories).catch(()=>setCategories([]));},[]);
+  useEffect(()=>{if(tab==='catalog')void invoke<{name:string}[]>('catalog_categories').then(setCategories).catch(()=>setCategories([]));},[tab]);
   const [hits, setHits] = useState<Hit[]>([]);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);

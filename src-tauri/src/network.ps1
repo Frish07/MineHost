@@ -62,7 +62,7 @@ switch ($r.action) {
       $maps.Add([int]$r.externalPort,'TCP',[int]$r.port,[string]$r.internalIp,$true,$description) | Out-Null
     } else {
       if ($mapping) {
-        if ($mapping.Description -ne $description -or [string]$mapping.InternalClient -ne [string]$r.internalIp -or [int]$mapping.InternalPort -ne [int]$r.port) { throw 'Mapping ownership or destination differs; refusing to remove it' }
+        if ($mapping.Description -ne $description -or [string]$mapping.InternalClient -ne [string]$r.internalIp) { throw 'Mapping ownership or destination differs; refusing to remove it' }
         $maps.Remove([int]$r.externalPort,'TCP')
       }
     }

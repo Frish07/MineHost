@@ -31,6 +31,13 @@ pub(crate) fn source(root: &Path, id: &str, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 pub fn create(root: &Path, server: &Server, profile: &Path) -> Result<PathBuf> {
+    create_progress(root, server, profile, &|_, _| Ok(()))
+}
+pub fn create_progress(root: &Path, server: &Server, profile: &Path, progress: &dyn Fn(u64,u64)->Result<()>) -> Result<PathBuf> {
+    let names = archive::tree(profile)?;
+    let mut total = 0_u64;
+    for name in &names { total=total.checked_add(std::fs::metadata(profile.join(name)).map_err(error)?.len()).ok_or("Backup size overflow")?; }
+    progress(0,total)?;
     let folder = root.join("backups");
     safety::reject_links(&folder)?;
     std::fs::create_dir_all(&folder).map_err(error)?;
@@ -48,17 +55,18 @@ pub fn create(root: &Path, server: &Server, profile: &Path) -> Result<PathBuf> {
         writer
             .write_all(&serde_json::to_vec(server).map_err(error)?)
             .map_err(error)?;
-        for name in archive::tree(profile)? {
+        let mut done=0_u64;
+        let mut buffer=vec![0_u8;1024*1024];
+        for name in names {
             if name == MANIFEST {
                 continue;
             }
             writer.start_file(&name, options).map_err(error)?;
-            std::io::copy(
-                &mut std::fs::File::open(profile.join(name)).map_err(error)?,
-                &mut writer,
-            )
-            .map_err(error)?;
+            let path=profile.join(name);safety::reject_links(&path)?;
+            let mut input=std::fs::File::open(path).map_err(error)?;
+            loop {progress(done,total)?;let n=input.read(&mut buffer).map_err(error)?;if n==0 {break;}writer.write_all(&buffer[..n]).map_err(error)?;done+=n as u64;if done>archive::LIMIT {return Err("Backup exceeds 32 GiB".into());}}
         }
+        progress(done,total)?;
         writer.finish().map_err(error)?.sync_all().map_err(error)
     })();
     if result.is_err() {
@@ -215,17 +223,8 @@ fn restore(root: &Path, server: &Server, path: &Path, world: Option<&str>) -> Re
     let properties = stage.0.join("server.properties");
     safety::reject_links(&properties)?;
     let text = std::fs::read_to_string(&properties).map_err(error)?;
-    let mut lines = text
-        .lines()
-        .filter(|v| {
-            !v.split_once('=')
-                .is_some_and(|(k, _)| matches!(k.trim(), "server-port" | "online-mode"))
-        })
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    lines.push(format!("server-port={}", server.port));
-    lines.push("online-mode=true".into());
-    let text = lines.join("\n") + "\n";
+    let port = server.port.to_string();
+    let text = crate::properties::patch(&text, &[("server-port", &port), ("online-mode", "true")])?;
     safety::properties(&text, server.port)?;
     safety::atomic_write(&properties, text.as_bytes())?;
     safety::atomic_write(

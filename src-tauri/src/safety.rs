@@ -66,54 +66,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub fn properties(content: &str, port: u16) -> Result<()> {
-    if content.len() > 65536 || content.contains('\0') {
-        return Err("Properties file is too large or contains NUL".into());
-    }
-    let mut found_port = false;
-    let mut found_online = false;
-    for line in content
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.starts_with('#') && !s.starts_with('!') && !s.is_empty())
-    {
-        // Keep this editor a strict subset of Java Properties: no escapes or continued lines.
-        if line.contains('\\') {
-            return Err("Escapes and line continuations are unsupported in this editor".into());
-        }
-        let (key, value) = line.split_once('=').ok_or("Use key=value syntax")?;
-        match key.trim() {
-            "server-port" => {
-                if found_port || value.trim().parse::<u16>().ok() != Some(port) {
-                    return Err("Keep the unique profile server-port unchanged".into());
-                }
-                found_port = true;
-            }
-            "online-mode" => {
-                if found_online || value.trim() != "true" {
-                    return Err("This version requires online-mode=true".into());
-                }
-                found_online = true;
-            }
-            "level-name" => {
-                if value.trim().is_empty()
-                    || !value
-                        .trim()
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                {
-                    return Err("World name must be a simple directory name".into());
-                }
-            }
-            "enable-rcon" | "enable-query" | "enable-jmx-monitoring" if value.trim() != "false" => {
-                return Err("Additional network listeners are not supported in this version".into())
-            }
-            _ => (),
-        }
-    }
-    if !found_port || !found_online {
-        return Err("server-port and online-mode=true are required".into());
-    }
-    Ok(())
+    crate::properties::validate(content, port)
 }
 
 pub fn zip_path(name: &str) -> Result<&Path> {

@@ -15,6 +15,8 @@ pub struct Settings {
     pub interval_hours: u32,
     pub keep_local: usize,
     pub cloud: bool,
+    #[serde(default)]
+    pub maintenance: bool,
     pub keep_cloud: usize,
 }
 impl Default for Settings {
@@ -24,6 +26,7 @@ impl Default for Settings {
             interval_hours: 24,
             keep_local: 7,
             cloud: false,
+            maintenance: false,
             keep_cloud: 7,
         }
     }
@@ -105,7 +108,7 @@ pub fn save_backup_schedule(
     plan.settings = settings;
     plan.last_attempt = 0;
     plan.message =
-        "Schedule saved; runs only while MineHost is open and the server is stopped".into();
+        "Schedule saved; runs while MineHost is open, waiting for stop unless maintenance is approved".into();
     write(&state, &id, &plan)?;
     Ok(plan)
 }
@@ -141,7 +144,7 @@ fn retain_local(root: &Path, id: &str, keep: usize) -> Result<()> {
     }
     Ok(())
 }
-fn perform(shared: &Shared, id: &str, p: &Plan, cancel: &AtomicBool) -> Result<()> {
+fn perform(shared: &Shared, id: &str, p: &Plan, cancel: &AtomicBool, app: Option<&tauri::AppHandle>) -> Result<()> {
     let (server, root, profile) = {
         let inner = lock(shared)?;
         (
@@ -159,8 +162,12 @@ fn perform(shared: &Shared, id: &str, p: &Plan, cancel: &AtomicBool) -> Result<(
         false
     };
     if !resumed {
-        drive::progress(shared, "archiving", 0, 0);
-        let source = backups::create(&root, &server, &profile)?;
+        drive::progress(shared, "preparing", 0, 0);
+        let source = if let Some(app)=app {
+            let outcome=crate::maintenance::capture(shared,app.clone(),id,p.settings.maintenance,Some(cancel))?;
+            if let Some(error)=outcome.error {return Err(error);}
+            root.join("backups").join(outcome.backup.ok_or("Scheduled backup produced no archive")?)
+        } else {let _profile=crate::begin(shared,id)?;backups::create(&root,&server,&profile)?};
         let name = format!("{id}-auto-{}.zip", uuid::Uuid::new_v4());
         let path = root.join("backups").join(&name);
         std::fs::rename(source, &path).map_err(error)?;
@@ -185,7 +192,7 @@ fn due(p: &Plan, time: u64) -> bool {
         && p.next_due <= time
         && (p.last_attempt == 0 || time.saturating_sub(p.last_attempt) >= 300)
 }
-fn tick(shared: &Shared, id: &str) -> Result<()> {
+fn tick(shared: &Shared, id: &str, app: Option<&tauri::AppHandle>) -> Result<()> {
     let mut p = read(shared, id)?;
     if !due(&p, now()) {
         return Ok(());
@@ -197,7 +204,7 @@ fn tick(shared: &Shared, id: &str) -> Result<()> {
     }
     {
         let inner = lock(shared)?;
-        if inner.running.contains_key(id)
+        if (inner.running.contains_key(id) && !p.settings.maintenance)
             || inner.busy.contains(id)
             || inner.busy.contains("java-install")
         {
@@ -207,11 +214,10 @@ fn tick(shared: &Shared, id: &str) -> Result<()> {
             return Ok(());
         }
     }
-    let _profile = crate::begin(shared, id)?;
     p.last_attempt = now();
     p.message = "Creating scheduled backup".into();
     write(shared, id, &p)?;
-    let result = perform(shared, id, &p, &cancel);
+    let result = perform(shared, id, &p, &cancel, app);
     drive::finish(shared, &result);
     if result.is_ok() {
         p.last_success = now();
@@ -223,7 +229,7 @@ fn tick(shared: &Shared, id: &str) -> Result<()> {
     write(shared, id, &p)?;
     result
 }
-pub fn start(shared: &Shared) {
+pub fn start(shared: &Shared, app: tauri::AppHandle) {
     let weak = Arc::downgrade(shared);
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
@@ -241,7 +247,7 @@ pub fn start(shared: &Shared) {
         })();
         if let Ok(ids) = ids {
             for id in ids {
-                let _ = tick(&shared, &id);
+                let _ = tick(&shared, &id, Some(&app));
             }
         }
     });
@@ -275,14 +281,14 @@ mod tests {
         p.next_due = now() - 1;
         write(&shared, &id, &p).unwrap();
         let operation = crate::begin(&shared, &id).unwrap();
-        tick(&shared, &id).unwrap();
+        tick(&shared, &id, None).unwrap();
         assert_eq!(read(&shared, &id).unwrap().last_success, 0);
         drop(operation);
-        tick(&shared, &id).unwrap();
+        tick(&shared, &id, None).unwrap();
         let saved = read(&shared, &id).unwrap();
         assert!(saved.last_success > 0);
         assert_eq!(saved.next_due, saved.last_success + 86400);
-        tick(&shared, &id).unwrap();
+        tick(&shared, &id, None).unwrap();
         let paths: Vec<_> = std::fs::read_dir(stage.0.join("backups"))
             .unwrap()
             .collect();

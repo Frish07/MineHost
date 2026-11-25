@@ -102,6 +102,7 @@ mod tests {
             claim: None,
             drive: Default::default(),
             lifecycle: Default::default(),
+            maintenance: Default::default(),
         };
         insert(&inner, "server", "session", "Steve", "leave").unwrap();
         drop(inner);

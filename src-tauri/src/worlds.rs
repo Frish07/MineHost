@@ -53,32 +53,13 @@ fn properties(root: &Path) -> Result<String> {
 }
 fn active(root: &Path) -> Result<String> {
     let content = properties(root)?;
-    let mut selected = "world".to_string();
-    for line in content.lines().map(str::trim) {
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == "level-name" {
-                selected = v.trim().to_string();
-            }
-        }
-    }
+    let selected = crate::properties::values(&content)?.get("level-name").cloned().unwrap_or_else(|| "world".into());
     world_name(&selected)?;
     Ok(selected)
 }
 fn update_properties(root: &Path, port: u16, values: &[(&str, &str)]) -> Result<()> {
     let old = properties(root)?;
-    let mut content = old
-        .lines()
-        .filter(|line| {
-            !values
-                .iter()
-                .any(|(key, _)| line.split_once('=').is_some_and(|(k, _)| k.trim() == *key))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    content.push('\n');
-    for (key, value) in values {
-        content.push_str(&format!("{key}={value}\n"));
-    }
+    let content = crate::properties::patch(&old, values)?;
     safety::properties(&content, port)?;
     let path = files::root_path(root, "server.properties")?;
     files::backup(root, &path, "file-backups")?;
