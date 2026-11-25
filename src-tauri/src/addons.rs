@@ -18,26 +18,60 @@ use std::{
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
-pub enum Provider { #[default] Modrinth, Curseforge }
+pub enum Provider {
+    #[default]
+    Modrinth,
+    Curseforge,
+}
 #[derive(Clone)]
 pub struct InstallItem {
-    pub provider: Provider, pub project_id: String, pub version_id: String,
-    pub version_number: String, pub file_name: String, pub size: u64,
-    pub url: String, pub checksum: String,
+    pub provider: Provider,
+    pub project_id: String,
+    pub version_id: String,
+    pub version_number: String,
+    pub file_name: String,
+    pub size: u64,
+    pub url: String,
+    pub checksum: String,
 }
 impl From<&PlanItem> for InstallItem {
-    fn from(v: &PlanItem) -> Self { Self{provider:Provider::Modrinth,project_id:v.project_id.clone(),version_id:v.version_id.clone(),version_number:v.version_number.clone(),file_name:v.file_name.clone(),size:v.size,url:v.url.clone(),checksum:v.sha512.clone()} }
+    fn from(v: &PlanItem) -> Self {
+        Self {
+            provider: Provider::Modrinth,
+            project_id: v.project_id.clone(),
+            version_id: v.version_id.clone(),
+            version_number: v.version_number.clone(),
+            file_name: v.file_name.clone(),
+            size: v.size,
+            url: v.url.clone(),
+            checksum: v.sha512.clone(),
+        }
+    }
 }
 pub type Progress<'a> = dyn Fn(DownloadProgress) + Send + Sync + 'a;
-pub type DownloadFuture<'a> = Pin<Box<dyn Future<Output=Result<()>>+Send+'a>>;
+pub type DownloadFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 pub trait AddonProvider: Send + Sync {
-    fn provider(&self)->Provider;
-    fn download<'a>(&'a self,item: &'a InstallItem,path: &'a Path,progress: &'a Progress<'a>)->DownloadFuture<'a>;
+    fn provider(&self) -> Provider;
+    fn download<'a>(
+        &'a self,
+        item: &'a InstallItem,
+        path: &'a Path,
+        progress: &'a Progress<'a>,
+    ) -> DownloadFuture<'a>;
 }
 struct ModrinthProvider;
 impl AddonProvider for ModrinthProvider {
-    fn provider(&self)->Provider {Provider::Modrinth}
-    fn download<'a>(&'a self,item: &'a InstallItem,path: &'a Path,progress: &'a Progress<'a>)->DownloadFuture<'a> {Box::pin(async move {runtime::download(&item.url,&item.checksum,path,progress).await})}
+    fn provider(&self) -> Provider {
+        Provider::Modrinth
+    }
+    fn download<'a>(
+        &'a self,
+        item: &'a InstallItem,
+        path: &'a Path,
+        progress: &'a Progress<'a>,
+    ) -> DownloadFuture<'a> {
+        Box::pin(async move { runtime::download(&item.url, &item.checksum, path, progress).await })
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -144,10 +178,17 @@ pub fn managed(root: &Path) -> Result<Vec<Managed>> {
     for item in &values {
         jar_filename(&item.file_name)?;
         match item.provider {
-            Provider::Modrinth => { crate::modrinth::identifier(&item.project_id)?; crate::modrinth::identifier(&item.version_id)?; }
-            Provider::Curseforge => {crate::curseforge::identifier(&item.project_id)?;crate::curseforge::identifier(&item.version_id)?;}
+            Provider::Modrinth => {
+                crate::modrinth::identifier(&item.project_id)?;
+                crate::modrinth::identifier(&item.version_id)?;
+            }
+            Provider::Curseforge => {
+                crate::curseforge::identifier(&item.project_id)?;
+                crate::curseforge::identifier(&item.version_id)?;
+            }
         }
-        if !projects.insert((item.provider,&item.project_id)) || !names.insert(item.file_name.to_ascii_lowercase())
+        if !projects.insert((item.provider, &item.project_id))
+            || !names.insert(item.file_name.to_ascii_lowercase())
         {
             return Err("Duplicate addon registry entry".into());
         }
@@ -193,7 +234,7 @@ pub fn installed(root: &Path, software: Software) -> Result<Vec<Installed>> {
             .iter()
             .find(|v| v.file_name.eq_ignore_ascii_case(base));
         result.push(Installed {
-            provider: record.map(|v|v.provider),
+            provider: record.map(|v| v.provider),
             enabled: !name.ends_with(".disabled"),
             size: meta.len(),
             file_name: name,
@@ -435,7 +476,9 @@ pub(crate) fn file_hash(path: &Path, checksum: &str) -> Result<String> {
     }
     let mut input = std::fs::File::open(path).map_err(error)?;
     let mut hasher: Box<dyn sha2::digest::DynDigest> = match checksum.len() {
-        128 => Box::new(Sha512::new()), 40 => Box::new(sha1::Sha1::new()),32 => Box::new(md5::Md5::new()),
+        128 => Box::new(Sha512::new()),
+        40 => Box::new(sha1::Sha1::new()),
+        32 => Box::new(md5::Md5::new()),
         _ => return Err("Unsupported addon checksum".into()),
     };
     let mut bytes = [0_u8; 65536];
@@ -446,7 +489,11 @@ pub(crate) fn file_hash(path: &Path, checksum: &str) -> Result<String> {
         }
         hasher.update(&bytes[..size]);
     }
-    Ok(hasher.finalize().iter().map(|b|format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 fn fabric_loader(root: &Path, software: Software) -> Result<Option<String>> {
@@ -474,14 +521,33 @@ pub async fn install(
     approved: &[String],
     progress: &(dyn Fn(DownloadProgress) + Send + Sync),
 ) -> Result<()> {
-    let items=items.iter().map(InstallItem::from).collect::<Vec<_>>();
-    install_verified(root,software,game,&items,approved,progress,&ModrinthProvider).await
+    let items = items.iter().map(InstallItem::from).collect::<Vec<_>>();
+    install_verified(
+        root,
+        software,
+        game,
+        &items,
+        approved,
+        progress,
+        &ModrinthProvider,
+    )
+    .await
 }
 pub async fn install_verified(
-    root: &Path, software: Software, game: &str, items: &[InstallItem], approved: &[String],
-    progress: &Progress<'_>, provider: &dyn AddonProvider,
+    root: &Path,
+    software: Software,
+    game: &str,
+    items: &[InstallItem],
+    approved: &[String],
+    progress: &Progress<'_>,
+    provider: &dyn AddonProvider,
 ) -> Result<()> {
-    if items.is_empty() || items.len()>32 || items.iter().any(|v|v.provider!=provider.provider() || v.size==0 || v.size>256*1024*1024) {
+    if items.is_empty()
+        || items.len() > 32
+        || items
+            .iter()
+            .any(|v| v.provider != provider.provider() || v.size == 0 || v.size > 256 * 1024 * 1024)
+    {
         return Err("Invalid addon provider plan or file size".into());
     }
     let expected: HashSet<&str> = items.iter().map(|v| v.version_id.as_str()).collect();
@@ -499,9 +565,12 @@ pub async fn install_verified(
     let mut done = 0_u64;
     for item in items {
         jar_filename(&item.file_name)?;
-        let old = registry.iter().find(|v| v.provider==item.provider && v.project_id == item.project_id);
+        let old = registry
+            .iter()
+            .find(|v| v.provider == item.provider && v.project_id == item.project_id);
         if registry.iter().any(|v| {
-            v.file_name.eq_ignore_ascii_case(&item.file_name) && (v.provider!=item.provider || v.project_id != item.project_id)
+            v.file_name.eq_ignore_ascii_case(&item.file_name)
+                && (v.provider != item.provider || v.project_id != item.project_id)
         }) {
             return Err("Addon filename belongs to a different installed project".into());
         }
@@ -530,9 +599,9 @@ pub async fn install_verified(
         if old.is_some()
             && old_file.is_file()
             && old_base.eq_ignore_ascii_case(&item.file_name)
-            && file_hash(&old_file,&item.checksum)? == item.checksum
+            && file_hash(&old_file, &item.checksum)? == item.checksum
         {
-            registry.retain(|v| v.provider!=item.provider || v.project_id != item.project_id);
+            registry.retain(|v| v.provider != item.provider || v.project_id != item.project_id);
             registry.push(Managed {
                 provider: item.provider,
                 project_id: item.project_id.clone(),
@@ -556,7 +625,7 @@ pub async fn install_verified(
                 Some(total),
             ))
         };
-        provider.download(item,&file,&report).await?;
+        provider.download(item, &file, &report).await?;
         if std::fs::metadata(&file).map_err(error)?.len() != item.size {
             return Err("Addon length differs from provider metadata".into());
         }
@@ -597,7 +666,7 @@ fn commit_files(
             }
             std::fs::rename(staged, target).map_err(error)?;
             created.push(target.clone());
-            registry.retain(|v| v.provider!=item.provider || v.project_id != item.project_id);
+            registry.retain(|v| v.provider != item.provider || v.project_id != item.project_id);
             registry.push(Managed {
                 provider: item.provider,
                 project_id: item.project_id.clone(),
