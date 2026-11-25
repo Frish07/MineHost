@@ -11,6 +11,9 @@ mod drive_auth;
 mod files;
 mod forge;
 mod history;
+mod lifecycle;
+mod monitor;
+mod tick_metrics;
 mod modpacks;
 mod modrinth;
 mod network;
@@ -26,9 +29,9 @@ use runtime::Runtime;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{ChildStdin, Command, Stdio},
+    process::{ChildStdin, Command},
     sync::{Arc, Mutex},
 };
 use tauri::{Emitter, Manager, State};
@@ -71,6 +74,13 @@ struct Running {
     players: Option<Vec<String>>,
     connected: HashSet<String>,
     session: String,
+    process: Option<monitor::Process>,
+    pid: u32,
+    started: std::time::Instant,
+    intent: lifecycle::Intent,
+    custom_path: String,
+    tick_query: Option<tick_metrics::Query>,
+    last_tick_query: Option<std::time::Instant>,
 }
 
 struct Inner {
@@ -82,6 +92,7 @@ struct Inner {
     agent: Option<playit::ManagedAgent>,
     claim: Option<playit::Claim>,
     drive: drive::Session,
+    lifecycle: HashMap<String, lifecycle::Control>,
 }
 
 struct Operation {
@@ -359,12 +370,17 @@ struct LogEvent {
     line: String,
 }
 fn append_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String) {
+    append_session_log(shared, app, id, line, None);
+}
+fn append_session_log(shared: &Shared, app: &tauri::AppHandle, id: &str, line: String, session: Option<&str>) {
     let line: String = line.chars().take(8192).collect();
     if let Ok(mut inner) = shared.lock() {
+        if session.is_some_and(|session|inner.running.get(id).is_none_or(|r|r.session!=session)) {return;}
         if let Err(e) = history::record(&mut inner, id, &line) {
             eprintln!("Connection history: {e}");
         }
         if let Some(running) = inner.running.get_mut(id) {
+            tick_metrics::observe(running, &line);
             if running.player_query.is_some() {
                 if let Some(names) = players::online_line(&line) {
                     running.players = Some(names);
@@ -390,7 +406,9 @@ fn read_pipe(
     shared: Shared,
     app: tauri::AppHandle,
     id: String,
-) {
+    session: String,
+) -> std::sync::mpsc::Receiver<()> {
+    let (finished, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // A malicious plugin cannot grow an unbounded line buffer.
         let mut reader = BufReader::new(pipe);
@@ -398,129 +416,33 @@ fn read_pipe(
             let mut buffer = Vec::new();
             match std::io::Read::take(&mut reader, 8192).read_until(b'\n', &mut buffer) {
                 Ok(0) | Err(_) => break,
-                Ok(_) => append_log(
+                Ok(_) => append_session_log(
                     &shared,
                     &app,
                     &id,
                     String::from_utf8_lossy(&buffer).trim_end().to_string(),
+                    Some(&session),
                 ),
             }
         }
+        let _ = finished.send(());
     });
+    receiver
 }
 
 #[tauri::command]
-fn start_server(
-    state: State<'_, Shared>,
-    app: tauri::AppHandle,
-    id: String,
-    custom_path: String,
-) -> Result<()> {
-    let _operation = begin(&state, &id)?;
-    let (server, dir, root) = {
-        let inner = lock(&state)?;
-        (
-            load(&inner, &id)?,
-            directory(&inner, &id)?,
-            inner.root.clone(),
-        )
-    };
-    if !server.eula || !server.installed {
-        return Err(
-            "Install server software and explicitly accept the EULA before starting".into(),
-        );
-    }
-    let java = runtime::detect_java(&root, server.java_major, &custom_path)?;
-    let mut inner = lock(&state)?;
-    if inner.busy.contains("java-install") {
-        return Err("Wait for Java installation".into());
-    }
-    if inner.running.values().map(|r| r.ram).sum::<u32>() + server.ram_mb > RAM_BUDGET {
-        return Err("Combined server heap budget exceeds 12 GiB".into());
-    }
-    let port_probe = std::net::TcpListener::bind(("0.0.0.0", server.port))
-        .map_err(|e| format!("Port unavailable: {e}"))?;
-    let mut command = Command::new(java.path);
-    command.args(["-Xms256M", &format!("-Xmx{}M", server.ram_mb)]);
-    if matches!(
-        server.software,
-        software::Software::Forge | software::Software::Neoforge
-    ) {
-        command.args(forge::launch_arguments(
-            &dir,
-            server.software,
-            &server.version,
-        )?);
-    } else {
-        command.args(["-jar", server.software.launcher(), "nogui"]);
-    }
-    command
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    runtime::hide_window(&mut command);
-    drop(port_probe);
-    let mut child = command.spawn().map_err(error)?;
-    let input = child.stdin.take().ok_or("Missing child stdin")?;
-    inner.running.insert(
-        id.clone(),
-        Running {
-            input: Arc::new(Mutex::new(input)),
-            ram: server.ram_mb,
-            player_query: None,
-            players: None,
-            connected: HashSet::new(),
-            session: uuid::Uuid::new_v4().to_string(),
-        },
-    );
-    inner.logs.insert(id.clone(), VecDeque::new());
-    drop(inner);
-    if let Some(stdout) = child.stdout.take() {
-        read_pipe(stdout, state.inner().clone(), app.clone(), id.clone());
-    }
-    if let Some(stderr) = child.stderr.take() {
-        read_pipe(stderr, state.inner().clone(), app.clone(), id.clone());
-    }
+async fn start_server(state: State<'_, Shared>, app: tauri::AppHandle, id: String, custom_path: String) -> Result<()> {
     let shared = state.inner().clone();
-    std::thread::spawn(move || {
-        let result = child.wait();
-        if let Ok(mut inner) = shared.lock() {
-            if let Err(e) = history::end(&inner, &id) {
-                eprintln!("Connection history: {e}");
-            }
-            inner.running.remove(&id);
-        }
-        append_log(
-            &shared,
-            &app,
-            &id,
-            format!("[MineHost] Process exited: {result:?}"),
-        );
-        let _ = app.emit("servers-changed", ());
-    });
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move ||lifecycle::manual_start(&shared, app, &id, custom_path)).await.map_err(error)?
 }
-
 #[tauri::command]
 fn send_command(state: State<'_, Shared>, id: String, command: String) -> Result<()> {
-    safety::command(&command)?;
-    let input = lock(&state)?
-        .running
-        .get(&id)
-        .ok_or("Server is not running")?
-        .input
-        .clone();
-    let mut input = input.lock().map_err(error)?;
-    writeln!(input, "{}", command.trim_start_matches('/')).map_err(error)?;
-    input.flush().map_err(error)
+    lifecycle::command(state.inner(), &id, &command)
 }
-
 #[tauri::command]
 fn stop_server(state: State<'_, Shared>, id: String) -> Result<()> {
-    send_command(state, id, "stop".into())
+    lifecycle::command(state.inner(), &id, "stop")
 }
-
 #[tauri::command]
 fn server_logs(state: State<'_, Shared>, id: String) -> Result<Vec<String>> {
     let inner = lock(&state)?;
@@ -759,7 +681,9 @@ fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> 
     transaction
         .execute("DELETE FROM backup_schedules WHERE server_id=?1", [&id])
         .map_err(error)?;
+    transaction.execute("DELETE FROM restart_policies WHERE server_id=?1", [&id]).map_err(error)?;
     transaction.commit().map_err(error)?;
+    inner.lifecycle.remove(&id);
     Ok(())
 }
 
@@ -806,10 +730,11 @@ fn main() {
         db.execute_batch(history::SCHEMA)?;
         db.execute_batch(network::SCHEMA)?;
         db.execute_batch(backup_schedule::SCHEMA)?;
-        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None, drive: drive::Session::default() })));
+        db.execute_batch(lifecycle::SCHEMA)?;
+        app.manage(Arc::new(Mutex::new(Inner { db, root, running: HashMap::new(), busy: HashSet::new(), logs: HashMap::new(), agent: None, claim: None, drive: drive::Session::default(), lifecycle: HashMap::new() })));
         backup_schedule::start(app.state::<Shared>().inner());
         Ok(())
-    }).invoke_handler(tauri::generate_handler![drive::drive_help, drive::drive_status, drive::drive_cancel, drive::drive_configure, drive::drive_connect, drive::drive_disconnect, drive::drive_discard, drive::drive_list, drive::drive_upload, drive::drive_resume, drive::drive_download, drive::drive_trash, backup_schedule::backup_schedule, backup_schedule::save_backup_schedule, list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
+    }).invoke_handler(tauri::generate_handler![monitor::server_metrics, lifecycle::restart_server, lifecycle::cancel_restart, lifecycle::restart_status, lifecycle::save_restart_policy, tick_metrics::query_tick_metrics, drive::drive_help, drive::drive_status, drive::drive_cancel, drive::drive_configure, drive::drive_connect, drive::drive_disconnect, drive::drive_discard, drive::drive_list, drive::drive_upload, drive::drive_resume, drive::drive_download, drive::drive_trash, backup_schedule::backup_schedule, backup_schedule::save_backup_schedule, list_servers, create_server, software_versions, install_software, accept_eula, java_status, install_java, start_server, stop_server, send_command, server_logs, read_properties, save_properties, import_addon, list_addons, set_addon_enabled, remove_addon, search_addons, addon_versions, plan_addon, install_addon, open_addon_project, open_folder, delete_server, backup_server, files::list_files, files::read_file, files::save_file, files::file_action, worlds::list_worlds, worlds::configure_world, worlds::import_world, worlds::export_world, worlds::trash_world, players::player_records, players::player_action, players::query_players, history::connection_history, catalog::catalog_categories, catalog::catalog_details, modpacks::inspect_pack, modpacks::install_pack, backups::list_backups, backups::inspect_backup, backups::restore_backup, backups::import_backup, dimensions::transfer_dimension, network::connection_endpoint, network::network_settings, network::save_network_settings, network::network_adapters, network::public_ip, network::local_network_status, network::external_network_status, network::dns_check, network::firewall_status, network::firewall_change, network::upnp_change, playit::playit_install, playit::playit_import_agent, playit::playit_claim, playit::playit_finish_claim, playit::playit_start, playit::playit_stop, playit::playit_forget, playit::playit_status, playit::network_open_link])
         .build(tauri::generate_context!()).expect("Failed to initialize MineHost");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -861,6 +786,7 @@ mod tests {
             agent: None,
             claim: None,
             drive: drive::Session::default(),
+            lifecycle: HashMap::new(),
         };
         save(&inner, &server).unwrap();
         Arc::new(Mutex::new(inner))
