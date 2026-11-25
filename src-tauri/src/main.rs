@@ -1,12 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod addons;
-mod deletion;
 mod archive;
 mod backup_schedule;
 mod backups;
 mod catalog;
 mod curseforge;
+mod deletion;
 mod dimensions;
 mod drive;
 mod drive_auth;
@@ -673,12 +673,21 @@ fn open_folder(state: State<'_, Shared>, id: String) -> Result<()> {
 
 #[tauri::command]
 async fn delete_server(state: State<'_, Shared>, id: String, confirmation: String) -> Result<()> {
-    let shared=state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move||deletion::delete(&shared,&id,&confirmation)).await.map_err(error)?
+    let shared = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || deletion::delete(&shared, &id, &confirmation))
+        .await
+        .map_err(error)?
 }
 #[tauri::command]
-async fn addon_details(state:State<'_,Shared>,id:String,file_name:String)->Result<addons::Details>{
-    profile_task(state.inner().clone(),id,false,move|server,dir|addons::details(&dir,server.software,&file_name)).await
+async fn addon_details(
+    state: State<'_, Shared>,
+    id: String,
+    file_name: String,
+) -> Result<addons::Details> {
+    profile_task(state.inner().clone(), id, false, move |server, dir| {
+        addons::details(&dir, server.software, &file_name)
+    })
+    .await
 }
 #[tauri::command]
 async fn backup_server(state: State<'_, Shared>, id: String) -> Result<String> {

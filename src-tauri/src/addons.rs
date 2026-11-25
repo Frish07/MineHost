@@ -153,14 +153,49 @@ fn canonical(name: &str) -> Result<&str> {
     jar_filename(value)?;
     Ok(value)
 }
-#[derive(Serialize)] #[serde(rename_all="camelCase")]
-pub struct Details {file_name:String,descriptor:String,content:String}
-pub fn details(root:&Path,software:Software,name:&str)->Result<Details>{
-    canonical(name)?;let path=addon_dir(root,software)?.join(name);safety::reject_links(&path)?;
-    let file=std::fs::File::open(path).map_err(error)?;if file.metadata().map_err(error)?.len()>256*1024*1024{return Err("Addon exceeds 256 MiB".into());}
-    let mut zip=zip::ZipArchive::new(file).map_err(error)?;
-    let descriptors=match software {Software::Paper|Software::Purpur=>&["paper-plugin.yml","plugin.yml"][..],Software::Fabric=>&["fabric.mod.json"][..],Software::Forge=>&["META-INF/mods.toml"][..],Software::Neoforge=>&["META-INF/neoforge.mods.toml","META-INF/mods.toml"][..],Software::Vanilla=>return Err("Vanilla does not support addons".into())};
-    for descriptor in descriptors{if let Ok(entry)=zip.by_name(descriptor){if entry.size()>65536{return Err("Addon descriptor exceeds 64 KiB".into());}let mut content=String::new();entry.take(65537).read_to_string(&mut content).map_err(error)?;if content.len()>65536{return Err("Addon descriptor exceeds 64 KiB".into());}return Ok(Details{file_name:name.into(),descriptor:(*descriptor).into(),content});}}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Details {
+    file_name: String,
+    descriptor: String,
+    content: String,
+}
+pub fn details(root: &Path, software: Software, name: &str) -> Result<Details> {
+    canonical(name)?;
+    let path = addon_dir(root, software)?.join(name);
+    safety::reject_links(&path)?;
+    let file = std::fs::File::open(path).map_err(error)?;
+    if file.metadata().map_err(error)?.len() > 256 * 1024 * 1024 {
+        return Err("Addon exceeds 256 MiB".into());
+    }
+    let mut zip = zip::ZipArchive::new(file).map_err(error)?;
+    let descriptors = match software {
+        Software::Paper | Software::Purpur => &["paper-plugin.yml", "plugin.yml"][..],
+        Software::Fabric => &["fabric.mod.json"][..],
+        Software::Forge => &["META-INF/mods.toml"][..],
+        Software::Neoforge => &["META-INF/neoforge.mods.toml", "META-INF/mods.toml"][..],
+        Software::Vanilla => return Err("Vanilla does not support addons".into()),
+    };
+    for descriptor in descriptors {
+        if let Ok(entry) = zip.by_name(descriptor) {
+            if entry.size() > 65536 {
+                return Err("Addon descriptor exceeds 64 KiB".into());
+            }
+            let mut content = String::new();
+            entry
+                .take(65537)
+                .read_to_string(&mut content)
+                .map_err(error)?;
+            if content.len() > 65536 {
+                return Err("Addon descriptor exceeds 64 KiB".into());
+            }
+            return Ok(Details {
+                file_name: name.into(),
+                descriptor: (*descriptor).into(),
+                content,
+            });
+        }
+    }
     Err("No supported addon descriptor found".into())
 }
 fn metadata_path(root: &Path) -> PathBuf {
@@ -713,9 +748,19 @@ fn commit_files(
 mod tests {
     use super::*;
     #[test]
-    fn descriptor_view_reads_only_selected_addon_and_never_executes_content(){
-        let stage=crate::archive::Stage::new(&std::env::temp_dir()).unwrap();std::fs::create_dir(stage.0.join("plugins")).unwrap();jar(&stage.0.join("plugins/sample.jar"),"plugin.yml","name: Sample\nversion: 1.0\nmain: sample.Main\n");
-        let shown=details(&stage.0,Software::Paper,"sample.jar").unwrap();assert_eq!(shown.descriptor,"plugin.yml");assert!(shown.content.contains("name: Sample"));assert!(details(&stage.0,Software::Paper,"../sample.jar").is_err());assert!(details(&stage.0,Software::Fabric,"sample.jar").is_err());
+    fn descriptor_view_reads_only_selected_addon_and_never_executes_content() {
+        let stage = crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        std::fs::create_dir(stage.0.join("plugins")).unwrap();
+        jar(
+            &stage.0.join("plugins/sample.jar"),
+            "plugin.yml",
+            "name: Sample\nversion: 1.0\nmain: sample.Main\n",
+        );
+        let shown = details(&stage.0, Software::Paper, "sample.jar").unwrap();
+        assert_eq!(shown.descriptor, "plugin.yml");
+        assert!(shown.content.contains("name: Sample"));
+        assert!(details(&stage.0, Software::Paper, "../sample.jar").is_err());
+        assert!(details(&stage.0, Software::Fabric, "sample.jar").is_err());
     }
     #[test]
     fn legacy_registry_and_equal_ids_keep_provider_namespaces() {

@@ -147,7 +147,9 @@ fn import(root: &Path, source: &Path, target: &str) -> Result<()> {
         return Err("World directory already exists; choose another name".into());
     }
     safety::reject_links(source)?;
-    if source.is_dir(){return import_folder(root,source,&destination);}
+    if source.is_dir() {
+        return import_folder(root, source, &destination);
+    }
     let input = std::fs::File::open(source).map_err(error)?;
     if input.metadata().map_err(error)?.len() > ARCHIVE_LIMIT {
         return Err("Archive exceeds 32 GiB".into());
@@ -214,22 +216,46 @@ fn import(root: &Path, source: &Path, target: &str) -> Result<()> {
     };
     std::fs::rename(extracted, destination).map_err(error)
 }
-fn import_folder(root:&Path,source:&Path,destination:&Path)->Result<()> {
-    if !source.join("level.dat").is_file(){return Err("Select the world folder containing level.dat".into());}
-    let names=crate::archive::tree(source)?;
-    for name in &names {archive_name(name)?;}
-    let stage=staging(root)?;
-    let mut total=0_u64;
+fn import_folder(root: &Path, source: &Path, destination: &Path) -> Result<()> {
+    if !source.join("level.dat").is_file() {
+        return Err("Select the world folder containing level.dat".into());
+    }
+    let names = crate::archive::tree(source)?;
+    for name in &names {
+        archive_name(name)?;
+    }
+    let stage = staging(root)?;
+    let mut total = 0_u64;
     for name in names {
-        let input=source.join(&name);safety::reject_links(&input)?;
-        let mut file=std::fs::File::open(&input).map_err(error)?;let expected=file.metadata().map_err(error)?.len();
-        total=total.checked_add(expected).ok_or("World size overflow")?;if total>ARCHIVE_LIMIT{return Err("World exceeds 32 GiB".into());}
-        let output=stage.0.join(&name);std::fs::create_dir_all(output.parent().ok_or("Missing world parent")?).map_err(error)?;
-        let mut output=std::fs::OpenOptions::new().create_new(true).write(true).open(output).map_err(error)?;
-        if std::io::copy(&mut (&mut file).take(expected.saturating_add(1)),&mut output).map_err(error)?!=expected {return Err("World source changed while copying; retry with a stopped source server".into());}
+        let input = source.join(&name);
+        safety::reject_links(&input)?;
+        let mut file = std::fs::File::open(&input).map_err(error)?;
+        let expected = file.metadata().map_err(error)?.len();
+        total = total.checked_add(expected).ok_or("World size overflow")?;
+        if total > ARCHIVE_LIMIT {
+            return Err("World exceeds 32 GiB".into());
+        }
+        let output = stage.0.join(&name);
+        std::fs::create_dir_all(output.parent().ok_or("Missing world parent")?).map_err(error)?;
+        let mut output = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(output)
+            .map_err(error)?;
+        if std::io::copy(
+            &mut (&mut file).take(expected.saturating_add(1)),
+            &mut output,
+        )
+        .map_err(error)?
+            != expected
+        {
+            return Err(
+                "World source changed while copying; retry with a stopped source server".into(),
+            );
+        }
         output.sync_all().map_err(error)?;
     }
-    std::fs::rename(&stage.0,destination).map_err(error)
+    std::fs::rename(&stage.0, destination).map_err(error)
 }
 fn export(root: &Path, world: &str, destination: &Path) -> Result<()> {
     world_name(world)?;
@@ -422,10 +448,27 @@ fn trash(root: &Path, name: &str, confirmation: &str) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn imports_folder_without_altering_source_or_replacing_existing_world(){
-        let stage=crate::archive::Stage::new(&std::env::temp_dir()).unwrap();let source=stage.0.join("source");let profile=stage.0.join("profile");std::fs::create_dir_all(source.join("region")).unwrap();std::fs::create_dir(&profile).unwrap();std::fs::write(source.join("level.dat"),b"world data").unwrap();std::fs::write(source.join("region/r.0.0.mca"),b"region").unwrap();
-        import(&profile,&source,"uploaded").unwrap();assert_eq!(std::fs::read(profile.join("uploaded/level.dat")).unwrap(),b"world data");assert_eq!(std::fs::read(source.join("region/r.0.0.mca")).unwrap(),b"region");assert!(import(&profile,&source,"uploaded").is_err());
-        std::fs::write(source.join("run.jar"),b"executable").unwrap();assert!(import(&profile,&source,"unsafe").is_err());assert!(!profile.join("unsafe").exists());
+    fn imports_folder_without_altering_source_or_replacing_existing_world() {
+        let stage = crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        let source = stage.0.join("source");
+        let profile = stage.0.join("profile");
+        std::fs::create_dir_all(source.join("region")).unwrap();
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(source.join("level.dat"), b"world data").unwrap();
+        std::fs::write(source.join("region/r.0.0.mca"), b"region").unwrap();
+        import(&profile, &source, "uploaded").unwrap();
+        assert_eq!(
+            std::fs::read(profile.join("uploaded/level.dat")).unwrap(),
+            b"world data"
+        );
+        assert_eq!(
+            std::fs::read(source.join("region/r.0.0.mca")).unwrap(),
+            b"region"
+        );
+        assert!(import(&profile, &source, "uploaded").is_err());
+        std::fs::write(source.join("run.jar"), b"executable").unwrap();
+        assert!(import(&profile, &source, "unsafe").is_err());
+        assert!(!profile.join("unsafe").exists());
     }
     use std::io::Write;
     fn temp() -> PathBuf {
