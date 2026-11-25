@@ -558,7 +558,8 @@ pub async fn install_verified(
     let dir = addon_dir(root, software)?;
     let mut registry = managed(root)?;
     let loader = fabric_loader(root, software)?;
-    let staging = private_dir(root, &format!("staging/{}", uuid::Uuid::new_v4()))?;
+    let stage = crate::archive::Stage::new(&private_dir(root, "staging")?)?;
+    let staging = &stage.0;
     let backups = private_dir(root, &format!("addon-backups/{}", uuid::Uuid::new_v4()))?;
     let mut changes = Vec::new();
     let total: u64 = items.iter().map(|v| v.size).sum();
@@ -634,7 +635,6 @@ pub async fn install_verified(
         changes.push((item.clone(), old_file, target, file));
     }
     commit_files(root, &backups, &changes, registry)?;
-    let _ = std::fs::remove_dir(&staging);
     progress(DownloadProgress::new(
         DownloadPhase::Complete,
         total,
@@ -701,6 +701,13 @@ fn commit_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_registry_and_equal_ids_keep_provider_namespaces() {
+        let stage=crate::archive::Stage::new(&std::env::temp_dir()).unwrap();
+        std::fs::create_dir(stage.0.join(".minehost")).unwrap();
+        std::fs::write(metadata_path(&stage.0),br#"[{"projectId":"10","versionId":"100","fileName":"a.jar","versionNumber":"1"},{"provider":"curseforge","projectId":"10","versionId":"100","fileName":"b.jar","versionNumber":"1"}]"#).unwrap();
+        let records=managed(&stage.0).unwrap();assert_eq!(records.len(),2);assert_eq!(records[0].provider,Provider::Modrinth);assert_eq!(records[1].provider,Provider::Curseforge);
+    }
     fn temp() -> PathBuf {
         let root = std::env::temp_dir().join(format!("minehost-addon-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
