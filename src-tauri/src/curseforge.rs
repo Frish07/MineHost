@@ -771,7 +771,11 @@ pub async fn cf_search(
     sort: String,
     category: Option<u32>,
 ) -> Result<Search> {
-    if query.len() > 100 || query.chars().any(char::is_control) || index > 9980 || !index.is_multiple_of(20) {
+    if query.len() > 100
+        || query.chars().any(char::is_control)
+        || index > 9980
+        || !index.is_multiple_of(20)
+    {
         return Err("Invalid CurseForge search/page".into());
     }
     let sort = match sort.as_str() {
@@ -931,14 +935,15 @@ pub async fn cf_plan(
     let (server, dir) = crate::profile_path(&state, &id)?;
     let api = Api::configured()?;
     let (class, _) = api.class(server.software).await?;
-    let plan = api.plan(
-        project,
-        file,
-        &server,
-        &active(&dir, server.software)?,
-        class,
-    )
-    .await?;
+    let plan = api
+        .plan(
+            project,
+            file,
+            &server,
+            &active(&dir, server.software)?,
+            class,
+        )
+        .await?;
     check_disabled(&dir, server.software, &plan)?;
     Ok(plan)
 }
@@ -947,7 +952,9 @@ fn check_disabled(dir: &Path, software: Software, plan: &Plan) -> Result<()> {
         if item.provider == Some(Provider::Curseforge) && !item.enabled {
             if let Some(project) = item.project_id {
                 let project = identifier(&project)?;
-                if project != plan.root_project && plan.items.iter().any(|v| v.project_id == project) {
+                if project != plan.root_project
+                    && plan.items.iter().any(|v| v.project_id == project)
+                {
                     return Err(format!("Required CurseForge project {project} is disabled; enable it before planning installation"));
                 }
             }
@@ -956,7 +963,13 @@ fn check_disabled(dir: &Path, software: Software, plan: &Plan) -> Result<()> {
     Ok(())
 }
 #[derive(Deserialize)]
-pub struct InstallRequest { project: u32, file: u32, approved: Vec<Approval>, manual: Vec<Manual>, consent: bool }
+pub struct InstallRequest {
+    project: u32,
+    file: u32,
+    approved: Vec<Approval>,
+    manual: Vec<Manual>,
+    consent: bool,
+}
 #[tauri::command]
 pub async fn cf_install(
     state: State<'_, Shared>,
@@ -964,7 +977,13 @@ pub async fn cf_install(
     request: InstallRequest,
     on_progress: tauri::ipc::Channel<DownloadProgress>,
 ) -> Result<()> {
-    let InstallRequest { project, file, mut approved, manual, consent } = request;
+    let InstallRequest {
+        project,
+        file,
+        mut approved,
+        manual,
+        consent,
+    } = request;
     if !consent {
         return Err("Confirm trust in third-party mod/plugin code before installing".into());
     }
@@ -1233,12 +1252,18 @@ mod tests {
         let installed = addons::installed(&root, Software::Paper).unwrap();
         assert_eq!(installed[0].provider, Some(Provider::Curseforge));
         assert_eq!(installed[0].project_id.as_deref(), Some("10"));
-        addons::set_enabled(&root,Software::Paper,"test.jar",false).unwrap();
-        let mut record: Project=serde_json::from_value(project(10)).unwrap();record.class_id=Some(5);
-        let mut remote: File=serde_json::from_value(file(100,10,json!([]))).unwrap();remote.file_name="test.jar".into();
-        let required=Plan{root_project:20,root_file:200,items:vec![plan_item(&record,&remote).unwrap()]};
-        assert!(check_disabled(&root,Software::Paper,&required).is_err());
-        addons::set_enabled(&root,Software::Paper,"test.jar.disabled",true).unwrap();
+        addons::set_enabled(&root, Software::Paper, "test.jar", false).unwrap();
+        let mut record: Project = serde_json::from_value(project(10)).unwrap();
+        record.class_id = Some(5);
+        let mut remote: File = serde_json::from_value(file(100, 10, json!([]))).unwrap();
+        remote.file_name = "test.jar".into();
+        let required = Plan {
+            root_project: 20,
+            root_file: 200,
+            items: vec![plan_item(&record, &remote).unwrap()],
+        };
+        assert!(check_disabled(&root, Software::Paper, &required).is_err());
+        addons::set_enabled(&root, Software::Paper, "test.jar.disabled", true).unwrap();
         let previous = std::fs::read(root.join("plugins/test.jar")).unwrap();
         let mut changed = item.clone();
         changed.version_id = "101".into();
