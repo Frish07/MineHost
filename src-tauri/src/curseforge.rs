@@ -67,8 +67,8 @@ impl Api {
         if self.requests.fetch_add(1, Ordering::Relaxed) >= 256 {
             return Err("CurseForge operation exceeds 256 API requests".into());
         }
-        let mut url = Url::parse(&format!("{}/{path}", self.base))
-            .map_err(|_| "Invalid API query")?;
+        let mut url =
+            Url::parse(&format!("{}/{path}", self.base)).map_err(|_| "Invalid API query")?;
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query);
         }
@@ -1121,7 +1121,8 @@ mod tests {
                 let request = String::from_utf8(bytes).unwrap();
                 assert!(
                     request.starts_with(&format!("GET {expected} HTTP/1.1")),
-                    "Unexpected request path: {}", request.lines().next().unwrap_or("")
+                    "Unexpected request path: {}",
+                    request.lines().next().unwrap_or("")
                 );
                 assert!(request
                     .to_ascii_lowercase()
