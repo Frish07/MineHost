@@ -1,6 +1,6 @@
 # MineHost 1.0.0
 
-> **Language / Язык:** [Русская версия](README.md) · **English**
+> **Language / Язык:** [Русская версия](README.ru.md) · **English**
 
 A manager for local Minecraft Java servers on Windows 11 x64. Servers, worlds, and settings stay on your computer. MineHost does not upload server files to GitHub Actions.
 
