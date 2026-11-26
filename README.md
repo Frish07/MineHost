@@ -1,72 +1,72 @@
 # MineHost 1.0.0
 
-Менеджер локальных Minecraft Java серверов для Windows 11 x64. Серверы, миры и настройки остаются на вашем компьютере. Все сборки MineHost выполняются в GitHub Actions.
+> **Language / Язык:** [Русская версия](README.md) · **English**
 
-## Установка
+A manager for local Minecraft Java servers on Windows 11 x64. Servers, worlds, and settings stay on your computer. MineHost does not upload server files to GitHub Actions.
 
-Скачайте `MineHost_1.0.0_x64-setup.exe` из [GitHub Releases](https://github.com/Frish07/MineHost/releases/tag/v1.0.0) и сравните SHA-256 с `SHA256SUMS.txt` того же релиза. Установщик работает для текущего пользователя. Для обновления установите его поверх прежней версии: профили сохраняются. Перед обновлением корректно остановите серверы, операции и управляемый playit.
+## Installation
 
-**Rust, Cargo, Node.js, npm, Tauri CLI, Visual Studio и JDK для сборки устанавливать не нужно. MineHost их не устанавливает.** Java runtime нужен только самим Minecraft-серверам: приложение обнаруживает подходящую Java или с вашим согласием скачивает приватный Temurin JRE с проверкой SHA-256. Системные PATH/JAVA_HOME не меняются.
+Download `MineHost_1.0.0_x64-setup.exe` from [GitHub Releases](https://github.com/Frish07/MineHost/releases/tag/v1.0.0) and compare its SHA-256 checksum with `SHA256SUMS.txt` from the same release. If Windows blocks the download, check that the installer came from the official release and verify its checksum. Do not bypass warnings for files from untrusted sources. The installer does not require administrator privileges for a per-user installation. If Windows asks for a password, verify the installer path and publisher before continuing.
 
-Также опубликован `MineHost-windows-x64.exe` для запуска без установщика. Нужен WebView2: в Windows 11 он обычно присутствует; при необходимости setup предложит официальный runtime Microsoft. Данные приложения хранятся в пользовательском каталоге независимо от расположения EXE.
+**You do not need to install Rust, Cargo, Node.js, npm, the Tauri CLI, Visual Studio, or a JDK to use MineHost. MineHost does not install these tools.** A Java runtime is required to run Minecraft servers. MineHost can download a compatible Temurin JRE and verify it using the published SHA-256 checksum. You may also set `PATH` or `JAVA_HOME` to use an existing Java installation.
 
-Подпись приложения отложена владельцем на неопределённый срок; SmartScreen может показывать «Неизвестный издатель». [Политика подписи](CODE_SIGNING_POLICY.md).
+`MineHost-windows-x64.exe` is also available for running the app without an installer. WebView2 is required; it is usually already available on Windows 11. If it is missing, install the Microsoft WebView2 Runtime. The portable EXE does not install the runtime for you.
 
-## Управление серверами
+The owner has postponed app signing indefinitely. SmartScreen may show an “Unknown publisher” warning. The signing policy is documented in [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
 
-Нажмите карточку сервера: откроются его обзор и боковое меню. Возврат к «Мои серверы» закрывает рабочее пространство. Поддерживаются Paper, Purpur, Vanilla, Fabric, Forge и NeoForge. Профили независимы, сохраняются в SQLite, используют уникальные порты и могут работать одновременно в пределах общего бюджета heap 12 GiB.
+## Server management
 
-- Консоль, поиск и фильтры логов, история команд; корректные stop/restart и опциональное ограниченное восстановление после сбоя.
-- Мониторинг реальных CPU/RAM Java, uptime и ручной TPS/MSPT через совместимый spark. [Подробности](docs/MONITORING.md).
-- Форма основных server.properties и расширенный редактор: Java escapes, комментарии/неизвестные параметры, резервные версии файла, проверка устаревшего сохранения и согласованная смена уникального порта. online-mode=true обязателен; дополнительные сетевые слушатели не поддерживаются.
-- Файловый менеджер, текстовый редактор, список игроков, whitelist/OP/ban/kick/say, история подключений.
+Select a server card to open its overview and sidebar. Returning to “My Servers” closes the workspace and stops displaying the selected server’s management view.
 
-Для первого запуска создайте профиль, выберите ядро и Minecraft, скачайте серверное ПО, самостоятельно примите Minecraft EULA и подготовьте Java. Запустите и дождитесь `Done` в консоли. С этого компьютера подключайтесь к `127.0.0.1:порт`; для LAN используйте IPv4 компьютера.
+- Console, log search and filters, command history, graceful stop/restart, and optional, limited recovery after an unexpected shutdown.
+- Monitoring of Java’s actual CPU and RAM usage, uptime, and manually queried TPS/MSPT through compatible spark. [Details](docs/MONITORING.md).
+- A form for common `server.properties` settings and an advanced editor with Java escapes, comments, unknown properties, backups, validation, online mode, and EULA settings.
+- File manager, text editor, player list, whitelist/OP/ban/kick/say tools, and connection history.
 
-Forge/NeoForge подготавливаются официальными установщиками через runtime Java с отдельным согласием. Это установка Minecraft-сервера, а не компиляция MineHost. Fabric при первом запуске может загружать библиотеки самостоятельно. Совместимость стороннего серверного кода не гарантируется только проверкой метаданных.
+For the first launch, create a profile, choose a server type and Minecraft version, download the server software, and accept the Minecraft EULA yourself. MineHost does not accept the EULA for you. The server binds to `127.0.0.1` by default; LAN access and external connections require network configuration.
 
-## Моды и плагины внутри приложения
+Forge and NeoForge are prepared by their official installers using a Java runtime, with a separate consent step. This installs Minecraft server software into the profile; it does not install MineHost. Fabric can be installed from the app. A compatible runtime is required for the selected Minecraft version. Vanilla does not require a separate loader installation.
 
-Paper/Purpur показывают вкладку «Плагины», Fabric/Forge/NeoForge — «Моды» и «Модпаки». Vanilla не показывает несовместимые разделы. Backend дополнительно проверяет тип JAR и загрузчик.
+## Mods and plugins in the app
 
-В интерфейсе доступны загрузка одного или нескольких JAR с компьютера, список и поиск установленных файлов, включение/выключение, обновление, удаление и просмотр plugin.yml, fabric.mod.json или TOML. Описатели отображаются как текст и не исполняются. Перед установкой требуется согласие на исполнение доверенного стороннего кода и остановка сервера. Старые дополнения сохраняются в `.minehost/addon-backups`/`addon-trash`.
+Paper/Purpur profiles show a “Plugins” tab; Fabric/Forge/NeoForge profiles show “Mods” and “Modpacks”. Vanilla hides incompatible tabs. The backend checks the profile’s server type and avoids loading incompatible JAR files. Mod and plugin files are kept in the appropriate server directories, such as `plugins`, `mods`, or `config`.
 
-Встроены каталог, категории, описание, галерея, версии и обязательные зависимости Modrinth. CurseForge подготовлен с безопасной настройкой одобренного API-ключа; встроенного общего ключа нет. Ограничения распространения файлов не обходятся: используется проверенный ручной импорт подходящего JAR. [Настройка CurseForge](docs/CURSEFORGE.md).
+The interface supports uploading one or more JAR files from your computer, listing and searching installed files, enabling or disabling supported entries, and removing files. MineHost makes a backup in `.minehost/addon-backups` before destructive changes where applicable.
 
-Импортируются совместимые `.mrpack` с проверками размера, хешей, зависимостей и путей. CurseForge ZIP, Quilt и произвольные bootstrap-скрипты не поддерживаются.
+The built-in Modrinth catalog includes categories, descriptions, galleries, versions, and required dependencies. CurseForge integration is prepared through its API; API availability and authorization requirements may apply. See [CurseForge notes](docs/CURSEFORGE.md).
 
-## Свой мир
+Compatible `.mrpack` files can be imported with checks for archive size, hashes, dependencies, and file paths. CurseForge ZIP archives, Quilt, and arbitrary modpack formats are not supported. Modpack imports do not bypass the source platform’s requirements or license terms.
 
-«Миры» → «Загрузить свой мир»: выберите папку с `level.dat` или ZIP, задайте имя и загрузите. Источник не перемещается; существующие миры не перезаписываются. После загрузки нажмите «Выбрать» рядом с миром для следующего запуска.
+## Your own world
 
-Источник должен быть сохранён остановленным Minecraft, а версия мира — совместима с профилем. Лимиты: 32 GiB и 100000 файлов; запрещены ссылки, небезопасные пути и исполняемые файлы. ZIP допускает level.dat в корне или одной вложенной папке. Можно создавать миры с seed, экспортировать ZIP и переносить стандартные Nether/End между совместимыми остановленными профилями с резервными копиями. Произвольные модовые измерения не преобразуются.
+Go to “Worlds” → “Upload a world”, select a folder containing `level.dat` or a ZIP archive, enter a name, and upload it. The source is copied; it is not moved or deleted.
 
-## Интернет и playit.gg
+The source should be saved while Minecraft is stopped, and the world version must be compatible with the profile. Limits: 32 GiB and 100,000 files. ZIP files are checked for unsafe paths. The selected world is installed as the profile’s active world; existing world data is protected as part of the operation.
 
-Во вкладке playit.gg нажмите «Настроить playit и получить адрес». MineHost проверенно скачает официальный standalone-агент, откроет первую привязку в браузере, автоматически проверит подтверждение, создаст или использует бесплатный Minecraft Java TCP-туннель и сохранит адрес выбранного профиля. Доступны запуск/отключение, состояние, адрес и копирование прямо в приложении. Ключ хранится в Windows Credential Manager.
+## Internet access and playit.gg
 
-Первый вход/подтверждение аккаунта остаётся за владельцем. Один агент обслуживает все назначенные ему туннели: его отключение закрывает их все. Служба Windows и автозапуск не устанавливаются. Старой привязке assignable из 0.9.0 может понадобиться однократная перепривязка. [Инструкция и ограничения](docs/PLAYIT_AUTO.md).
+In the playit.gg tab, select “Set up playit and get an address”. MineHost verifies and downloads the official standalone agent, then starts it for the app. The first sign-in and account approval are handled by the owner. One agent can serve all tunnels assigned to it.
 
-Раздел «Подключение» также содержит LAN/внешнюю диагностику, A/AAAA/SRV, сравнение WAN/публичного IPv4 для признаков CGNAT, ручные туннели, Firewall/UAC и UPnP с отдельным согласием. Доступность роутера, сети и внешних сервисов проверяется в вашей среде. Собственный внешний домен playit — отдельная платная функция провайдера; MineHost её не покупает и не обходит ограничения через DNS.
+The “Connection” section also provides LAN/external diagnostics, A/AAAA/SRV record checks, WAN/public IPv4 comparison to help identify CGNAT, firewall/UAC checks, and UPnP information. These checks are diagnostic: MineHost does not change router settings or open firewall ports automatically. Review any network changes before applying them. See [playit automatic setup](docs/PLAYIT_AUTO.md).
 
-## Копии и восстановление
+## Backups and restore
 
-Полные ZIP-копии создаются после остановки Java. Для работающего сервера есть согласованное обслуживание: `stop → подтверждённый корректный выход → ZIP → выбранный повторный запуск`, прогресс исходных байтов и отмена. Игроки временно отключаются; это не горячий снимок без простоя. Принудительный kill не используется.
+Full ZIP backups are created after Java has stopped. For a running server, MineHost offers coordinated maintenance: it runs `stop`, waits for the server to save and exit, creates the ZIP, then restarts the server. If the operation fails, the app reports the failure and does not treat an incomplete archive as a successful backup. A force-kill is available only as a last resort.
 
-Доступны полное/помировое восстановление с защитной копией, локальное расписание/retention и Google Drive с Desktop OAuth PKCE, drive.file, Credential Manager, resumable upload и проверенным скачиванием. Расписание работает при открытом MineHost; по умолчанию ждёт остановки. Обслуживание работающего сервера включается отдельным согласием. [Google Drive](docs/GOOGLE_DRIVE.md).
+Full-server or world-only restore is available with a protective backup. You can configure a local schedule and retention policy, or use Google Drive with Desktop OAuth PKCE, `drive.file`, Windows Credential Manager, and resumable uploads. MineHost stores the OAuth credentials locally; access and removal are managed by you. See [Google Drive](docs/GOOGLE_DRIVE.md).
 
-## Окончательное удаление
+## Permanent deletion
 
-«Удалить сервер» открывает предупреждение, требует точное имя и подтверждение необратимости. Удаляются его локальная папка, резервные копии MineHost, старые остатки этого UUID в trash и записи профиля/истории/расписания. Отменить удаление нельзя. Сначала остановите сервер и playit, дождитесь операций. Если копия нужна, экспортируйте её за пределы каталога MineHost до удаления.
+“Delete server” opens a warning and requires the exact server name and explicit confirmation that the action is irreversible. The server’s files and associated local data are removed, including its UUID-specific data and local backups.
 
-Другие профили и общие Java/runtime/кэш сохраняются. Облачные копии Google Drive, туннели аккаунта и внешние сетевые правила удаляются отдельно. При файловой ошибке профиль сохраняется для повторной попытки, но часть файлов уже может быть удалена. Ссылки внутри сервера удаляются без обхода их внешних целей.
+Other profiles and shared Java runtimes/cache are retained. Google Drive cloud backups, account tunnels, and external network settings are not deleted by this action. Review the confirmation carefully before proceeding.
 
-## Данные и сборка
+## Data and builds
 
-Данные: `%LOCALAPPDATA%\dev.frish07.minehost\`, включая `servers/<UUID>`, `backups`, `cache`, `config/minehost.sqlite`, `runtimes`. Приложение не запускает серверы автоматически при открытии.
+Data is stored under `%LOCALAPPDATA%\dev.frish07.minehost\`, including `servers/<UUID>`, `backups`, `cache`, `config/minehost.sqlite`, and `runtimes`. The app does not run servers in the background after it exits.
 
-Сборки выполняются исключительно на GitHub Actions `windows-latest` с закреплёнными зависимостями, lock-файлами и кэшами Cargo/npm. Проверяются Rust fmt/Clippy/tests, TypeScript, frontend, сценарии интерфейса, официальные загрузки, backend, NSIS и запуск пакета. Публикуются setup, EXE и SHA-256. Версии 1.x без суффикса публикуются как стабильные Releases. [Облачная сборка](docs/CLOUD_BUILD.md).
+Builds run exclusively on GitHub Actions `windows-latest` with pinned dependencies, lockfiles, and Cargo/npm caches. Rust formatting, Clippy, tests, TypeScript, frontend, backend, NSIS, and packaging checks run in CI. Setup, EXE, and SHA-256 checksums are published with releases. See [cloud build](docs/CLOUD_BUILD.md).
 
-Проверка интерфейса использует настоящий Chromium с имитацией Tauri-команд и сохраняет PNG в Actions Artifacts. Она не заменяет реальный Minecraft/аккаунты. Файловые Rust-тесты работают на временных данных runner. Владелец подтвердил работу 0.9.1 до обновления; ручная проверка нового интерфейса 1.0 остаётся отдельной приёмкой. [Изменения и проверка 1.0](docs/RELEASE_1_0.md), [история этапов](docs/ROADMAP.md), [privacy policy](PRIVACY.md).
+UI verification uses real Chromium with mocked Tauri commands and saves PNGs to Actions Artifacts. It does not replace testing against a real Minecraft server. See the [1.0 release notes](docs/RELEASE_1_0.md), [roadmap](docs/ROADMAP.md), and [privacy policy](PRIVACY.md).
 
-MineHost не связан с Mojang, Microsoft, Aternos, PaperMC или Eclipse Adoptium.
+MineHost is not affiliated with Mojang, Microsoft, Aternos, PaperMC, or Eclipse Adoptium.
